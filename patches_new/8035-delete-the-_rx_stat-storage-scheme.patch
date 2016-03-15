@@ -1,0 +1,143 @@
+From ffe7f28e698d2dbe4d377a4c92270bb0fad11ff8 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Mon, 11 Jan 2016 19:08:21 +0800
+Subject: [PATCH] delete the _rx_stat storage scheme
+
+---
+ src/odin/odinagent.c | 50 +++++++++++++++++++++++++++-----------------------
+ 1 file changed, 27 insertions(+), 23 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 40534b5..800756f 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -236,6 +236,7 @@ void finish_beacon_thread()
+     pthread_join(beacon_thread_id, NULL);
+ }
+ 
++/*
+ void cleanup_lvap(c_pmap rx_stats, int timeout)
+ {
+     c_iterator end, iter;
+@@ -260,6 +261,7 @@ void cleanup_lvap(c_pmap rx_stats, int timeout)
+     }
+ }
+ 
++
+ void* cleanup_thread(void *arg)
+ {
+     while (1) {
+@@ -282,6 +284,7 @@ void finish_cleanup_thread()
+     pthread_cancel(cleanup_thread_id);
+     pthread_join(cleanup_thread_id, NULL);
+ }
++*/
+ 
+ protocol_type protocol_string_to_enum(const char *protocol_str)
+ {
+@@ -545,7 +548,7 @@ static void send_probe_resp(EtherAddress dst, EtherAddress bssid, String *my_ssi
+ //			return;
+ 	hapd->conf->ssid.ssid_len = my_ssid->length;
+ 	if (os_memcmp(hapd->conf->ssid.ssid, my_ssid->str, my_ssid->length) == 0) {
+-	    wpa_printf(MSG_INFO, "handle_probe_resp: have already set network beacon");
++//	    wpa_printf(MSG_INFO, "handle_probe_resp: have already set network beacon");
+ 	    return;
+ 	}
+ 	wpa_printf(MSG_INFO, "handle_probe_resp: first set network beacon");
+@@ -923,16 +926,16 @@ void odin_protocol_eloop_deinit()
+ void params_init()
+ {
+ 	map_init(&_sta_mapping_table, etheraddress_comparer);
+-	map_init(&_rx_stats, etheraddress_comparer);
+-	map_init(&_mean_table, etheraddress_comparer);
++//	map_init(&_rx_stats, etheraddress_comparer);
++//	map_init(&_mean_table, etheraddress_comparer);
+ 	vector_init(&_subscription_list, subscription_comparer);
+ }
+ 
+ void params_deinit()
+ {
+ 	vector_deinit(&_subscription_list);
+-	map_deinit(&_mean_table);
+-	map_deinit(&_rx_stats);
++//	map_deinit(&_mean_table);
++//	map_deinit(&_rx_stats);
+ 	map_deinit(&_sta_mapping_table);
+ }
+ 
+@@ -1077,7 +1080,7 @@ void odin_protocol_init(struct hapd_interfaces *ifaces)
+ 	udp_sockfd_init();
+ 	params_init();
+ 	ping_thread_init();
+-	cleanup_thread_init();
++//	cleanup_thread_init();
+     beacon_thread_init();
+ 	client_sock_init();
+ 	odin_protocol_init_monitor_interface();
+@@ -1089,7 +1092,7 @@ void odin_protocol_deinit()
+ 	odin_protocol_deinit_monitor_interface();
+ 	client_sock_deinit();
+ 	finish_beacon_thread();
+-	finish_cleanup_thread();
++//	finish_cleanup_thread();
+ 	finish_thread();
+ 	params_deinit();
+ 	udp_sockfd_deinit();
+@@ -1216,37 +1219,38 @@ void update_rx_stats(u8 *addr, int datarate,
+ 		int rssi_signal, int noise)
+ {
+ 	EtherAddress src;
+-	EtherAddress *src_p;
++//	EtherAddress *src_p;
+ 	memcpy(&src, addr, ETH_ALEN);
+-	c_pair *p;
+-	c_iterator end, target;
++//	c_pair *p;
++//	c_iterator end, target;
+ 	StationStats *stat;
+ 
+-	end = c_map_end(_rx_stats);
+-	target = c_map_find(_rx_stats, &src);
++//	end = c_map_end(_rx_stats);
++//	target = c_map_find(_rx_stats, &src);
+ 
+-	if (ITER_EQUAL(end, target)) {
+-		src_p = malloc(sizeof(EtherAddress));
++//	if (ITER_EQUAL(end, target)) {
++//		src_p = malloc(sizeof(EtherAddress));
+ 		stat = malloc(sizeof(StationStats));
+ 
+ 		memset(stat, 0, sizeof(*stat));
+-		memcpy(src_p, &src, sizeof(EtherAddress));
++//		memcpy(src_p, &src, sizeof(EtherAddress));
+ 
+-		p = (c_pair *)malloc(sizeof(c_pair));
+-		*p = c_make_pair(src_p, stat);
+-		c_map_insert(_rx_stats, p);
+-	}
+-	else {
+-		stat = (StationStats *)( ((c_ppair)ITER_REF(target))->second );
+-	}
++//		p = (c_pair *)malloc(sizeof(c_pair));
++//		*p = c_make_pair(src_p, stat);
++//		c_map_insert(_rx_stats, p);
++//	}
++//	else {
++//		stat = (StationStats *)( ((c_ppair)ITER_REF(target))->second );
++//	}
+ 
+ 	stat->_rate = datarate;
+ 	stat->_noise = noise;
+ 	stat->_signal = rssi_signal + SIGNAL_OFFSET;
+-	stat->_packets++;
++//	stat->_packets++;
+ 	stat->_last_received = time(NULL);
+ 
+ 	match_against_subscriptions(stat, &src);
++	free(stat);
+ 
+ }
+ 
+-- 
+1.9.4.msysgit.2
+

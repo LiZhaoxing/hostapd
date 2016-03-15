@@ -1,0 +1,47 @@
+From 8494852cf1d6f10719851eabd244d88c2b9c60e5 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Tue, 8 Dec 2015 11:18:30 +0800
+Subject: [PATCH] =?UTF-8?q?=E6=83=B3=E5=8A=9E=E6=B3=95=E6=89=BE=E5=87=BAse?=
+ =?UTF-8?q?gmentation=20fault=E5=92=8Cbus=20error=E7=9A=84=E5=9C=B0?=
+ =?UTF-8?q?=E6=96=B9?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 10 +++-------
+ 1 file changed, 3 insertions(+), 7 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 17f0b4c..7283a7e 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -1183,22 +1183,18 @@ void recv_auth(unsigned char *buf)
+ 	unsigned char ssid[HOSTAPD_MAX_SSID_LEN + 1];
+ 	char tmp[SSID_MAX_LEN];
+ 	u16 auth_alg, auth_transaction, status_code;
+-	EtherAddress sa;
+-	const OdinStationState *state;
+-	int res;
+-	struct sta_info *sta;
+ 
+ 	auth_alg = le_to_host16(mgmt->u.auth.auth_alg);
+ 	auth_transaction = le_to_host16(mgmt->u.auth.auth_transaction);
+ 	status_code = le_to_host16(mgmt->u.auth.status_code);
+-//	wpa_printf(MSG_INFO, "recv auth");
++	wpa_printf(MSG_INFO, "recv auth");
+ 	if ((auth_transaction == 1) || (auth_transaction == 3)) {
+-//	    wpa_printf(MSG_INFO, "recv auth request");
++	    wpa_printf(MSG_INFO, "recv auth request");
+ 	    if (os_memcmp(mgmt->bssid, interfaces->iface[0]->bss[0]->own_addr, ETH_ALEN) == 0) {
+ 	        os_memcpy(ssid, interfaces->iface[0]->bss[0]->conf->ssid.ssid, interfaces->iface[0]->bss[0]->conf->ssid.ssid_len);
+ 	        ssid[interfaces->iface[0]->bss[0]->conf->ssid.ssid_len] = '\0';
+ 	        sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x %s\n", MAC2STR(mgmt->sa), ssid);
+-//	        wpa_printf(MSG_INFO, "recv auth request : %s", tmp);
++	        wpa_printf(MSG_INFO, "recv auth request : %s", tmp);
+ 	        udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
+ 	    }
+ 	}
+-- 
+1.9.4.msysgit.2
+

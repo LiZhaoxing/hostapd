@@ -1,0 +1,581 @@
+From b7926d67dca2eb9bf0fba2409d16316678fd64ab Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Tue, 10 Nov 2015 21:48:47 +0800
+Subject: [PATCH] remove beacon thread
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+去除原有的beacon线程和生成probe resp的函数
+---
+ src/odin/odinagent.c | 519 ---------------------------------------------------
+ 1 file changed, 519 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 6356861..72703e7 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -12,7 +12,6 @@
+ #include "ap/sta_info.h"
+ 
+ void remove_odin_lvaps_all();
+-static void send_beacon(EtherAddress dst, EtherAddress bssid, String *my_ssid);
+ 
+ char *protocol_string[15] = {"table", "channel", "interval", "rxstats",
+ 						  "subscriptions", "debug", "report_mean", "spectral_scan",
+@@ -195,42 +194,6 @@ void finish_thread()
+  	pthread_join(odin_thread_id, NULL);
+ }
+ 
+-void* beacon_thread(void *arg)
+-{
+-	c_iterator iter, end;
+-	EtherAddress *dst;
+-	OdinStationState *state;
+-	while (1) {
+-		iter = c_map_begin(_sta_mapping_table);
+-		end = c_map_end(_sta_mapping_table);
+-
+-		for(; !ITER_EQUAL(iter, end); ITER_INC(iter))
+-		{
+-			dst = (EtherAddress *)(((c_ppair)ITER_REF(iter))->first);
+-			state = (OdinStationState *)(((c_ppair)ITER_REF(iter))->second);
+-			send_beacon(*dst, state->_vap_bssid, &(state->_vap_ssids));
+-//			wpa_printf(MSG_INFO, "send beacon success!");
+-		}
+-
+-		usleep(100*1000);
+-	}
+-}
+-
+-int beacon_thread_init()
+-{
+-	if((pthread_create(&beacon_thread_id, NULL, (void *) beacon_thread, NULL)) != 0) {
+-		wpa_printf(MSG_ERROR, "Create beacon pthread error!");
+-		return 0;
+-	}
+-	return 1;
+-}
+-
+-void finish_beacon_thread()
+-{
+-  	pthread_cancel(beacon_thread_id);
+- 	pthread_join(beacon_thread_id, NULL);
+-}
+-
+ protocol_type protocol_string_to_enum(const char *protocol_str)
+ {
+ 	int i;
+@@ -470,450 +433,6 @@ void add_subscription(long subscription_id, EtherAddress sta_addr, String *stati
+ 	c_vector_push_back(_subscription_list, sub);
+ }
+ 
+-// added by MagicCG
+-static u8 * hostapd_eid_bss_load_odin(struct hostapd_data *hapd, u8 *eid, size_t len)
+-{
+-#ifdef CONFIG_TESTING_OPTIONS
+-	if (hapd->conf->bss_load_test_set) {
+-		if (2 + 5 > len)
+-			return eid;
+-		*eid++ = WLAN_EID_BSS_LOAD;
+-		*eid++ = 5;
+-		os_memcpy(eid, hapd->conf->bss_load_test, 5);
+-		eid += 5;
+-	}
+-#endif /* CONFIG_TESTING_OPTIONS */
+-	return eid;
+-}
+-
+-
+-static u8 ieee802_11_erp_info_odin(struct hostapd_data *hapd)
+-{
+-	u8 erp = 0;
+-
+-	if (hapd->iface->current_mode == NULL ||
+-	    hapd->iface->current_mode->mode != HOSTAPD_MODE_IEEE80211G)
+-		return 0;
+-
+-	if (hapd->iface->olbc)
+-		erp |= ERP_INFO_USE_PROTECTION;
+-	if (hapd->iface->num_sta_non_erp > 0) {
+-		erp |= ERP_INFO_NON_ERP_PRESENT |
+-			ERP_INFO_USE_PROTECTION;
+-	}
+-	if (hapd->iface->num_sta_no_short_preamble > 0 ||
+-	    hapd->iconf->preamble == LONG_PREAMBLE)
+-		erp |= ERP_INFO_BARKER_PREAMBLE_MODE;
+-
+-	return erp;
+-}
+-
+-
+-static u8 * hostapd_eid_ds_params_odin(struct hostapd_data *hapd, u8 *eid)
+-{
+-	*eid++ = WLAN_EID_DS_PARAMS;
+-	*eid++ = 1;
+-	*eid++ = hapd->iconf->channel;
+-	return eid;
+-}
+-
+-
+-static u8 * hostapd_eid_erp_info_odin(struct hostapd_data *hapd, u8 *eid)
+-{
+-	if (hapd->iface->current_mode == NULL ||
+-	    hapd->iface->current_mode->mode != HOSTAPD_MODE_IEEE80211G)
+-		return eid;
+-
+-	/* Set NonERP_present and use_protection bits if there
+-	 * are any associated NonERP stations. */
+-	/* TODO: use_protection bit can be set to zero even if
+-	 * there are NonERP stations present. This optimization
+-	 * might be useful if NonERP stations are "quiet".
+-	 * See 802.11g/D6 E-1 for recommended practice.
+-	 * In addition, Non ERP present might be set, if AP detects Non ERP
+-	 * operation on other APs. */
+-
+-	/* Add ERP Information element */
+-	*eid++ = WLAN_EID_ERP_INFO;
+-	*eid++ = 1;
+-	*eid++ = ieee802_11_erp_info_odin(hapd);
+-
+-	return eid;
+-}
+-
+-
+-static u8 * hostapd_eid_pwr_constraint_odin(struct hostapd_data *hapd, u8 *eid)
+-{
+-	u8 *pos = eid;
+-	u8 local_pwr_constraint = 0;
+-	int dfs;
+-
+-	if (hapd->iface->current_mode == NULL ||
+-	    hapd->iface->current_mode->mode != HOSTAPD_MODE_IEEE80211A)
+-		return eid;
+-
+-	/*
+-	 * There is no DFS support and power constraint was not directly
+-	 * requested by config option.
+-	 */
+-	if (!hapd->iconf->ieee80211h &&
+-	    hapd->iconf->local_pwr_constraint == -1)
+-		return eid;
+-
+-	/* Check if DFS is required by regulatory. */
+-	dfs = hostapd_is_dfs_required(hapd->iface);
+-	if (dfs < 0) {
+-		wpa_printf(MSG_WARNING, "Failed to check if DFS is required; ret=%d",
+-			   dfs);
+-		dfs = 0;
+-	}
+-
+-	if (dfs == 0 && hapd->iconf->local_pwr_constraint == -1)
+-		return eid;
+-
+-	/*
+-	 * ieee80211h (DFS) is enabled so Power Constraint element shall
+-	 * be added when running on DFS channel whenever local_pwr_constraint
+-	 * is configured or not. In order to meet regulations when TPC is not
+-	 * implemented using a transmit power that is below the legal maximum
+-	 * (including any mitigation factor) should help. In this case,
+-	 * indicate 3 dB below maximum allowed transmit power.
+-	 */
+-	if (hapd->iconf->local_pwr_constraint == -1)
+-		local_pwr_constraint = 3;
+-
+-	/*
+-	 * A STA that is not an AP shall use a transmit power less than or
+-	 * equal to the local maximum transmit power level for the channel.
+-	 * The local maximum transmit power can be calculated from the formula:
+-	 * local max TX pwr = max TX pwr - local pwr constraint
+-	 * Where max TX pwr is maximum transmit power level specified for
+-	 * channel in Country element and local pwr constraint is specified
+-	 * for channel in this Power Constraint element.
+-	 */
+-
+-	/* Element ID */
+-	*pos++ = WLAN_EID_PWR_CONSTRAINT;
+-	/* Length */
+-	*pos++ = 1;
+-	/* Local Power Constraint */
+-	if (local_pwr_constraint)
+-		*pos++ = local_pwr_constraint;
+-	else
+-		*pos++ = hapd->iconf->local_pwr_constraint;
+-
+-	return pos;
+-}
+-
+-
+-static u8 * hostapd_eid_country_add_odin(u8 *pos, u8 *end, int chan_spacing,
+-				    struct hostapd_channel_data *start,
+-				    struct hostapd_channel_data *prev)
+-{
+-	if (end - pos < 3)
+-		return pos;
+-
+-	/* first channel number */
+-	*pos++ = start->chan;
+-	/* number of channels */
+-	*pos++ = (prev->chan - start->chan) / chan_spacing + 1;
+-	/* maximum transmit power level */
+-	*pos++ = start->max_tx_power;
+-
+-	return pos;
+-}
+-
+-
+-static u8 * hostapd_eid_country_odin(struct hostapd_data *hapd, u8 *eid,
+-				int max_len)
+-{
+-	u8 *pos = eid;
+-	u8 *end = eid + max_len;
+-	int i;
+-	struct hostapd_hw_modes *mode;
+-	struct hostapd_channel_data *start, *prev;
+-	int chan_spacing = 1;
+-
+-	if (!hapd->iconf->ieee80211d || max_len < 6 ||
+-	    hapd->iface->current_mode == NULL)
+-		return eid;
+-
+-	*pos++ = WLAN_EID_COUNTRY;
+-	pos++; /* length will be set later */
+-	os_memcpy(pos, hapd->iconf->country, 3); /* e.g., 'US ' */
+-	pos += 3;
+-
+-	mode = hapd->iface->current_mode;
+-	if (mode->mode == HOSTAPD_MODE_IEEE80211A)
+-		chan_spacing = 4;
+-
+-	start = prev = NULL;
+-	for (i = 0; i < mode->num_channels; i++) {
+-		struct hostapd_channel_data *chan = &mode->channels[i];
+-		if (chan->flag & HOSTAPD_CHAN_DISABLED)
+-			continue;
+-		if (start && prev &&
+-		    prev->chan + chan_spacing == chan->chan &&
+-		    start->max_tx_power == chan->max_tx_power) {
+-			prev = chan;
+-			continue; /* can use same entry */
+-		}
+-
+-		if (start) {
+-			pos = hostapd_eid_country_add_odin(pos, end, chan_spacing,
+-						      start, prev);
+-			start = NULL;
+-		}
+-
+-		/* Start new group */
+-		start = prev = chan;
+-	}
+-
+-	if (start) {
+-		pos = hostapd_eid_country_add_odin(pos, end, chan_spacing,
+-					      start, prev);
+-	}
+-
+-	if ((pos - eid) & 1) {
+-		if (end - pos < 1)
+-			return eid;
+-		*pos++ = 0; /* pad for 16-bit alignment */
+-	}
+-
+-	eid[1] = (pos - eid) - 2;
+-
+-	return pos;
+-}
+-
+-
+-static u8 * hostapd_eid_wpa_odin(struct hostapd_data *hapd, u8 *eid, size_t len)
+-{
+-	const u8 *ie;
+-	size_t ielen;
+-
+-	ie = wpa_auth_get_wpa_ie(hapd->wpa_auth, &ielen);
+-	if (ie == NULL || ielen > len)
+-		return eid;
+-
+-	os_memcpy(eid, ie, ielen);
+-	return eid + ielen;
+-}
+-
+-
+-static u8 * hostapd_eid_csa_odin(struct hostapd_data *hapd, u8 *eid)
+-{
+-	u8 chan;
+-
+-	if (!hapd->iface->cs_freq_params.freq)
+-		return eid;
+-
+-	if (ieee80211_freq_to_chan(hapd->iface->cs_freq_params.freq, &chan) ==
+-	    NUM_HOSTAPD_MODES)
+-		return eid;
+-
+-	*eid++ = WLAN_EID_CHANNEL_SWITCH;
+-	*eid++ = 3;
+-	*eid++ = hapd->iface->cs_block_tx;
+-	*eid++ = chan;
+-	*eid++ = hapd->iface->cs_count;
+-
+-	return eid;
+-}
+-
+-
+-static u8 * hostapd_eid_secondary_channel_odin(struct hostapd_data *hapd, u8 *eid)
+-{
+-	u8 sec_ch;
+-
+-	if (!hapd->iface->cs_freq_params.sec_channel_offset)
+-		return eid;
+-
+-	if (hapd->iface->cs_freq_params.sec_channel_offset == -1)
+-		sec_ch = HT_INFO_HT_PARAM_SECONDARY_CHNL_BELOW;
+-	else if (hapd->iface->cs_freq_params.sec_channel_offset == 1)
+-		sec_ch = HT_INFO_HT_PARAM_SECONDARY_CHNL_ABOVE;
+-	else
+-		return eid;
+-
+-	*eid++ = WLAN_EID_SECONDARY_CHANNEL_OFFSET;
+-	*eid++ = 1;
+-	*eid++ = sec_ch;
+-
+-	return eid;
+-}
+-
+-
+-static u8 * hostapd_add_csa_elems_odin(struct hostapd_data *hapd, u8 *pos,
+-				  u8 *start, unsigned int *csa_counter_off)
+-{
+-	u8 *old_pos = pos;
+-
+-	if (!csa_counter_off)
+-		return pos;
+-
+-	*csa_counter_off = 0;
+-	pos = hostapd_eid_csa_odin(hapd, pos);
+-
+-	if (pos != old_pos) {
+-		/* save an offset to the counter - should be last byte */
+-		*csa_counter_off = pos - start - 1;
+-		pos = hostapd_eid_secondary_channel_odin(hapd, pos);
+-	}
+-
+-	return pos;
+-}
+-
+-
+-static u8 * hostapd_gen_probe_resp_odin(struct hostapd_data *hapd,
+-				   struct sta_info *sta,
+-				   EtherAddress dst,
+-				   EtherAddress bssid,
+-				   String *my_ssid,
+-				   int is_p2p, size_t *resp_len, int is_beacon)
+-{
+-	struct ieee80211_mgmt *resp;
+-	u8 *pos, *epos;
+-	size_t buflen;
+-//	u8 apple[6] = {0x30, 0x10, 0xe4, 0xec, 0x54, 0xf6};
+-//	u8 bssid_apple[6] = {0x00, 0x1b, 0xb3, 0xec, 0x54, 0xf6};
+-
+-#define MAX_PROBERESP_LEN 768
+-	buflen = MAX_PROBERESP_LEN;
+-#ifdef CONFIG_WPS
+-	if (hapd->wps_probe_resp_ie)
+-		buflen += wpabuf_len(hapd->wps_probe_resp_ie);
+-#endif /* CONFIG_WPS */
+-#ifdef CONFIG_P2P
+-	if (hapd->p2p_probe_resp_ie)
+-		buflen += wpabuf_len(hapd->p2p_probe_resp_ie);
+-#endif /* CONFIG_P2P */
+-	if (hapd->conf->vendor_elements)
+-		buflen += wpabuf_len(hapd->conf->vendor_elements);
+-	resp = os_zalloc(buflen);
+-	if (resp == NULL)
+-		return NULL;
+-
+-	epos = ((u8 *) resp) + MAX_PROBERESP_LEN;
+-
+-	if (is_beacon) {
+-		resp->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
+-				WLAN_FC_STYPE_BEACON);
+-	}
+-	else {
+-		resp->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
+-				WLAN_FC_STYPE_PROBE_RESP);
+-	}
+-	os_memcpy(resp->da, dst.mac_addr, ETH_ALEN);//dst->mac_addr, ETH_ALEN);
+-	os_memcpy(resp->sa, hapd->own_addr, ETH_ALEN);
+-
+-	os_memcpy(resp->bssid, bssid.mac_addr, ETH_ALEN);//bssid->mac_addr, ETH_ALEN);
+-	resp->u.probe_resp.beacon_int =
+-		host_to_le16(hapd->iconf->beacon_int);
+-
+-	/* hardware or low-level driver will setup seq_ctrl and timestamp */
+-	resp->u.probe_resp.capab_info =
+-		host_to_le16(hostapd_own_capab_info(hapd, sta, 1));
+-
+-	pos = resp->u.probe_resp.variable;
+-	if (is_beacon) {
+-		*pos++ = WLAN_EID_SSID;
+-		*pos++ = (my_ssid->length) - 1;
+-		os_memcpy(pos, my_ssid->str, (my_ssid->length)-1);
+-		pos += (my_ssid->length) - 1;
+-	}
+-	else {
+-		*pos++ = WLAN_EID_SSID;
+-		*pos++ = my_ssid->length;
+-		os_memcpy(pos, my_ssid->str, my_ssid->length);
+-		pos += my_ssid->length;
+-	}
+-
+-	//wpa_printf(MSG_INFO, MACSTR, MAC2STR(dst.mac_addr));
+-	//wpa_printf(MSG_INFO, MACSTR, MAC2STR(bssid.mac_addr));
+-
+-	/* Supported rates */
+-	pos = hostapd_eid_supp_rates(hapd, pos);
+-
+-	/* DS Params */
+-	pos = hostapd_eid_ds_params_odin(hapd, pos);
+-
+-	pos = hostapd_eid_country_odin(hapd, pos, epos - pos);
+-
+-	/* Power Constraint element */
+-	pos = hostapd_eid_pwr_constraint_odin(hapd, pos);
+-
+-	/* ERP Information element */
+-	pos = hostapd_eid_erp_info_odin(hapd, pos);
+-
+-	/* Extended supported rates */
+-	pos = hostapd_eid_ext_supp_rates(hapd, pos);
+-
+-	/* RSN, MDIE, WPA */
+-	pos = hostapd_eid_wpa_odin(hapd, pos, epos - pos);
+-
+-	pos = hostapd_eid_bss_load_odin(hapd, pos, epos - pos);
+-
+-#ifdef CONFIG_IEEE80211N
+-	pos = hostapd_eid_ht_capabilities(hapd, pos);
+-	pos = hostapd_eid_ht_operation(hapd, pos);
+-#endif /* CONFIG_IEEE80211N */
+-
+-	pos = hostapd_eid_ext_capab(hapd, pos);
+-
+-	pos = hostapd_eid_time_adv(hapd, pos);
+-	pos = hostapd_eid_time_zone(hapd, pos);
+-
+-	pos = hostapd_eid_interworking(hapd, pos);
+-	pos = hostapd_eid_adv_proto(hapd, pos);
+-	pos = hostapd_eid_roaming_consortium(hapd, pos);
+-
+-	pos = hostapd_add_csa_elems_odin(hapd, pos, (u8 *)resp,
+-				    &hapd->iface->cs_c_off_proberesp);
+-#ifdef CONFIG_IEEE80211AC
+-	pos = hostapd_eid_vht_capabilities(hapd, pos);
+-	pos = hostapd_eid_vht_operation(hapd, pos);
+-#endif /* CONFIG_IEEE80211AC */
+-
+-	/* Wi-Fi Alliance WMM */
+-	pos = (u8 *)hostapd_eid_wmm(hapd, pos);
+-
+-#ifdef CONFIG_WPS
+-	if (hapd->conf->wps_state && hapd->wps_probe_resp_ie) {
+-		os_memcpy(pos, wpabuf_head(hapd->wps_probe_resp_ie),
+-			  wpabuf_len(hapd->wps_probe_resp_ie));
+-		pos += wpabuf_len(hapd->wps_probe_resp_ie);
+-	}
+-#endif /* CONFIG_WPS */
+-
+-#ifdef CONFIG_P2P
+-	if ((hapd->conf->p2p & P2P_ENABLED) && is_p2p &&
+-	    hapd->p2p_probe_resp_ie) {
+-		os_memcpy(pos, wpabuf_head(hapd->p2p_probe_resp_ie),
+-			  wpabuf_len(hapd->p2p_probe_resp_ie));
+-		pos += wpabuf_len(hapd->p2p_probe_resp_ie);
+-	}
+-#endif /* CONFIG_P2P */
+-#ifdef CONFIG_P2P_MANAGER
+-	if ((hapd->conf->p2p & (P2P_MANAGE | P2P_ENABLED | P2P_GROUP_OWNER)) ==
+-	    P2P_MANAGE)
+-		pos = hostapd_eid_p2p_manage(hapd, pos);
+-#endif /* CONFIG_P2P_MANAGER */
+-
+-#ifdef CONFIG_HS20
+-	pos = hostapd_eid_hs20_indication(hapd, pos);
+-	pos = hostapd_eid_osen(hapd, pos);
+-#endif /* CONFIG_HS20 */
+-
+-	if (hapd->conf->vendor_elements) {
+-		os_memcpy(pos, wpabuf_head(hapd->conf->vendor_elements),
+-			  wpabuf_len(hapd->conf->vendor_elements));
+-		pos += wpabuf_len(hapd->conf->vendor_elements);
+-	}
+-
+-	*resp_len = pos - (u8 *) resp;
+-	return (u8 *) resp;
+-}
+-
+ static void send_probe_resp(EtherAddress dst, EtherAddress bssid, String *my_ssid)
+ {
+ //	u8 *resp;
+@@ -944,42 +463,6 @@ static void send_probe_resp(EtherAddress dst, EtherAddress bssid, String *my_ssi
+ //	os_free(resp);
+ }
+ 
+-static void send_beacon(EtherAddress dst, EtherAddress bssid, String *my_ssid)
+-{
+-	u8 *resp, *beacon;
+-	size_t resp_len, beacon_len;
+-	u8 radiotap_h[RADIOTAP_HEADER_LEN] = {0x00, 0x00, 0x0d, 0x00,
+-	                                      0x04, 0x80, 0x02, 0x00,
+-	                                      0x02, 0x00, 0x00, 0x00, 0x00};
+-	struct hostapd_data *hapd = interfaces->iface[0]->bss[0];
+-	int i;
+-
+-    for (i = 1; i < interfaces->iface[0]->num_bss; i++) {
+-        if (os_memcmp(interfaces->iface[0]->bss[i]->own_addr, bssid.mac_addr, ETH_ALEN) == 0) {
+-            hapd = interfaces->iface[0]->bss[i];
+-            break;
+-        }
+-    }
+-
+-	resp = hostapd_gen_probe_resp_odin(hapd, NULL,
+-									dst, bssid, my_ssid, 0, &resp_len, 1);
+-	if (resp == NULL)
+-			return;
+-
+-	beacon_len = RADIOTAP_HEADER_LEN + resp_len;
+-	beacon = os_zalloc(beacon_len);
+-	os_memcpy(beacon, radiotap_h, RADIOTAP_HEADER_LEN);
+-	os_memcpy(beacon + RADIOTAP_HEADER_LEN, resp, resp_len);
+-
+-//	wpa_printf(MSG_INFO, "handle_send_beacon: send start");
+-	if ((hapd->driver->send_mntr(hapd->drv_priv, beacon, beacon_len)) < 0)
+-	    wpa_printf(MSG_INFO, "handle_send_beacon: send failed");
+-//	if (hostapd_drv_send_mlme(hapd, resp, resp_len, 0) < 0)
+-//		wpa_printf(MSG_INFO, "handle_probe_resp: send failed");
+-//	wpa_printf(MSG_INFO, "handle_send_beacon: send success");
+-	os_free(resp);
+-	os_free(beacon);
+-}
+ 
+ void parse_odin_protocol(char *buf, int reply_sock)
+ {
+@@ -1437,7 +920,6 @@ void odin_protocol_init(struct hapd_interfaces *ifaces)
+ 	udp_sockfd_init();
+ 	params_init();
+ 	ping_thread_init();
+-	beacon_thread_init();
+ 	client_sock_init();
+ 	odin_protocol_init_monitor_interface();
+ }
+@@ -1447,7 +929,6 @@ void odin_protocol_deinit()
+ 	remove_odin_lvaps_all();
+ 	odin_protocol_deinit_monitor_interface();
+ 	client_sock_deinit();
+-	finish_beacon_thread();
+ 	finish_thread();
+ 	params_deinit();
+ 	udp_sockfd_deinit();
+-- 
+1.9.4.msysgit.2
+

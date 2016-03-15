@@ -1,0 +1,87 @@
+From 3bdba8aabfef842c937956fcc4074728f85611b8 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Sat, 17 Oct 2015 09:10:16 +0800
+Subject: [PATCH] =?UTF-8?q?=E6=B7=BB=E5=8A=A0=E4=BA=86system=E5=91=BD?=
+ =?UTF-8?q?=E4=BB=A4=E6=9D=A5=E5=AE=9E=E7=8E=B0=E6=B7=BB=E5=8A=A0=E7=BD=91?=
+ =?UTF-8?q?=E6=A1=A5?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 11 ++++++++++-
+ src/odin/odinagent.h |  1 +
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 9afc58c..38401b5 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -286,6 +286,7 @@ int remove_vap (EtherAddress *sta_mac)
+ 	c_iterator target, map_end, vector_iter, vector_last;
+ 	String *sta_ssid;
+ 	OdinStationState *state;
++	char ovs_del_port_command[50];
+ 
+ 	target = c_map_find(_sta_mapping_table, sta_mac);
+ 	map_end = c_map_end(_sta_mapping_table);
+@@ -298,6 +299,8 @@ int remove_vap (EtherAddress *sta_mac)
+ 	sta_ssid = &(state->_vap_ssids);
+ 
+ 	//for remove the bss
++	sprintf(ovs_del_port_command, "ovs-vsctl del-port %s %s", OVS_BRIDGE_NAME, sta_ssid->str);
++	system(ovs_del_port_command);
+ 	hostapd_remove_iface_odin(interfaces, sta_ssid->str);
+ 	//vector_deinit(&(state->_vap_ssids));
+ 
+@@ -322,6 +325,7 @@ int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress vap_bssid, Str
+ 	struct sta_info *sta;
+ 	struct hostapd_data *hapd;
+ 	int i;
++	char ovs_add_port_command[50];
+ 
+ 	u8 supp_rates[4] = {2, 4, 11, 22};
+ 	struct ieee80211_ht_capabilities cap;
+@@ -387,7 +391,8 @@ int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress vap_bssid, Str
+ 	}
+ 
+ 	free(bss_config);
+-
++	sprintf(ovs_add_port_command, "ovs-vsctl add-port %s %s", OVS_BRIDGE_NAME, state->_vap_ssids.str);
++	system(ovs_add_port_command);
+ 	return 0;
+ }
+ 
+@@ -1266,6 +1271,8 @@ void remove_odin_lvaps_all()
+ 	vector_deinit(&ssids);*/
+ 	int i, j;
+ 	struct hostapd_iface *hapd_iface;
++	char ovs_del_port_command[50];
++
+ 	for (i = 0; i < interfaces->count; i++) {
+ 		hapd_iface = interfaces->iface[i];
+ 		if (hapd_iface == NULL)
+@@ -1273,6 +1280,8 @@ void remove_odin_lvaps_all()
+ 
+ 		while ((hapd_iface->conf->num_bss) > 1) {
+ 			wpa_printf(MSG_INFO, "delete %s", hapd_iface->conf->bss[1]->iface);
++			sprintf(ovs_del_port_command, "ovs-vsctl del-port %s %s", OVS_BRIDGE_NAME, hapd_iface->conf->bss[1]->iface);
++			system(ovs_del_port_command);
+ 			hostapd_remove_iface_odin(interfaces, hapd_iface->conf->bss[1]->iface);
+ 		}
+ 	}
+diff --git a/src/odin/odinagent.h b/src/odin/odinagent.h
+index f195563..289255c 100644
+--- a/src/odin/odinagent.h
++++ b/src/odin/odinagent.h
+@@ -28,6 +28,7 @@
+ #define STRING_MAX_LEN		50
+ #define SSID_MAX_LEN		50
+ #define SIGNAL_OFFSET		256
++#define OVS_BRIDGE_NAME		"br1"
+ 
+ #ifndef IP2STR
+ #define IP2STR(a) a[0], a[1], a[2], a[3]
+-- 
+1.9.4.msysgit.2
+

@@ -1,0 +1,101 @@
+From 3b148542ba62a4027ff040f32fe4386680246ace Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Thu, 3 Dec 2015 10:54:13 +0800
+Subject: [PATCH] fix the bug : Bus error because of unaligned and segmentation
+ fault because of receiving the probe request without ssid and supported rate
+ elements
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+针对字节对齐所做的更改,和由于接收到无ssid和support rate element的probe request导致的segmentation fault
+---
+ src/odin/odinagent.c | 14 +++++++-------
+ src/odin/odinagent.h | 10 +++++-----
+ 2 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 3d6af69..c5ad6db 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -21,7 +21,7 @@ char *protocol_string[15] = {"table", "channel", "interval", "rxstats",
+ 
+ static inline int string_comparer(void *x, void *y)
+ {
+-	int length = (((String *)(x))->length) > (((String *)(y))->length) ? (((String *)(y))->length) : (((String *)(x))->length);
++	unsigned char length = (((String *)(x))->length) > (((String *)(y))->length) ? (((String *)(y))->length) : (((String *)(x))->length);
+ 	int i;
+ 
+ 	for (i = 0; i < length; i++)
+@@ -411,8 +411,8 @@ int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress vap_bssid, Str
+ 	state->_vap_ssids.length = ssid->length;
+ 	memcpy(state->_vap_ssids.str, ssid->str, (ssid->length)*sizeof(unsigned char));
+ 	sta_mac_p = (EtherAddress *)malloc(sizeof(EtherAddress));
+-	*sta_mac_p = sta_mac;
+-	//memcpy(sta_mac_p, sta_mac, sizeof(sta_mac));
++	//*sta_mac_p = sta_mac;
++	memcpy(sta_mac_p->mac_addr, sta_mac.mac_addr, ETH_ALEN);
+ 
+ 	p = (c_pair *)malloc(sizeof(c_pair));
+ 	*p = c_make_pair(sta_mac_p, state);
+@@ -474,9 +474,9 @@ void add_subscription(long subscription_id, EtherAddress sta_addr, String *stati
+ {
+ 	Subscription *sub = (Subscription *)malloc(sizeof(Subscription) + statistic->length*sizeof(unsigned char));
+ 	sub->subscription_id = subscription_id;
+-	sub->sta_addr = sta_addr;
+-	//memcpy(sub->sta_addr, sta_addr, sizeof(EtherAddress));
+-	memcpy(&(sub->statistic), statistic, sizeof(String) + statistic->length);
++	//sub->sta_addr = sta_addr;
++	memcpy(sub->sta_addr.mac_addr, sta_addr.mac_addr, ETH_ALEN);
++	memcpy(&(sub->statistic), statistic, sizeof(String) + statistic->length * sizeof(unsigned char));
+ 	sub->rel = rel;
+ 	sub->val = val;
+ 	c_vector_push_back(_subscription_list, sub);
+@@ -1214,7 +1214,7 @@ void recv_probe_request(unsigned char *buf)
+ 	String *ssid = NULL;
+ 	c_iterator map_end, target;
+ //wpa_printf(MSG_INFO, "recvprobe: come into the recv_probe_request");
+-	if (*ptr == WLAN_EID_SSID) {
++	if ((ptr != NULL) && (*ptr == WLAN_EID_SSID)) {
+ 		if(ptr[1] == 0) {
+ 			ssid_empty = 1;
+ 		}
+diff --git a/src/odin/odinagent.h b/src/odin/odinagent.h
+index 34000de..0ae7b1f 100644
+--- a/src/odin/odinagent.h
++++ b/src/odin/odinagent.h
+@@ -59,15 +59,15 @@ do { \
+ } while(0)
+ 
+ typedef struct EtherAddress {
+-	u8 mac_addr[ETH_ALEN];
++	unsigned char mac_addr[ETH_ALEN];
+ }EtherAddress;
+ 
+ typedef struct IPAddress {
+-	u8 ip[IP_ALEN];
++	unsigned char ip[IP_ALEN];
+ }IPAddress;
+ 
+ typedef struct String {
+-	int length;
++	unsigned char length;
+ 	unsigned char str[0];
+ }String;
+ 
+@@ -87,10 +87,10 @@ typedef struct OdinStationState {
+ 
+ typedef struct Subscription {
+     long subscription_id;
+-    EtherAddress sta_addr;
+-    //char statistic[STATISTIC_MAX_LEN];
+     enum relation_t rel;
+     double val;
++    EtherAddress sta_addr;
++    unsigned char reserved[1];// 用于字节对齐
+     String statistic;
+ }Subscription;
+ 
+-- 
+1.9.4.msysgit.2
+

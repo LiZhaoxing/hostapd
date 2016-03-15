@@ -1,0 +1,29 @@
+From 5d056979600a6eb79374202b367a431ca22e9594 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Wed, 21 Oct 2015 21:57:24 +0800
+Subject: [PATCH] =?UTF-8?q?station=E7=9A=84flag=E9=9C=80=E8=A6=81=E5=8A=A0?=
+ =?UTF-8?q?=E4=B8=8AWLAN=5FSTA=5FAUTHORIZED=E6=A0=87=E7=AD=BE?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 94565c5..08203a7 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -387,7 +387,7 @@ int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress vap_bssid, Str
+ 	sta->supported_rates_len = 4;
+ 	memcpy(&(sta->supported_rates), supp_rates, sta->supported_rates_len);
+ 	sta->listen_interval = 100;
+-	sta->flags |= WLAN_STA_HT | WLAN_STA_AUTH | WLAN_STA_ASSOC | WLAN_STA_WMM | WLAN_STA_SHORT_PREAMBLE;//WPA_STA_AUTHORIZED | WPA_STA_WMM | WPA_STA_SHORT_PREAMBLE;
++	sta->flags |= WLAN_STA_HT | WLAN_STA_AUTH | WLAN_STA_ASSOC | WLAN_STA_WMM | WLAN_STA_SHORT_PREAMBLE | WLAN_STA_AUTHORIZED;//WPA_STA_AUTHORIZED | WPA_STA_WMM | WPA_STA_SHORT_PREAMBLE;
+ 	sta->qosinfo = 0;
+ 	if (hostapd_sta_add(hapd, sta->addr, sta->aid, sta->capability,
+ 			    sta->supported_rates, sta->supported_rates_len,
+-- 
+1.9.4.msysgit.2
+

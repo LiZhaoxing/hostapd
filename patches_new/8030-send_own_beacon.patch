@@ -1,0 +1,295 @@
+From 18c159f863ecfe32f8d9e7151837099f4a3a042c Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Wed, 16 Dec 2015 10:23:55 +0800
+Subject: [PATCH] send_own_beacon
+
+---
+ src/ap/beacon.c      | 147 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/ap/beacon.h      |   5 ++
+ src/odin/odinagent.c |  59 +++++++++++++++++++++
+ src/odin/odinagent.h |   1 +
+ 4 files changed, 212 insertions(+)
+
+diff --git a/src/ap/beacon.c b/src/ap/beacon.c
+index e85a225..bdd1409 100644
+--- a/src/ap/beacon.c
++++ b/src/ap/beacon.c
+@@ -1062,4 +1062,151 @@ int ieee802_11_update_beacons(struct hostapd_iface *iface)
+ 	return ret;
+ }
+ 
++//added by MagicCG
++static u8 * generate_beacon_frame(struct hostapd_data *hapd,
++                   struct sta_info *sta,
++                   const u8 *sta_mac,
++                   const u8 *bssid,
++                   const u8 *ssid,
++                   size_t ssid_len,
++                   int is_p2p, size_t *resp_len)
++{
++    struct ieee80211_mgmt *resp;
++    u8 *pos, *epos;
++    size_t buflen;
++
++#define MAX_PROBERESP_LEN 768
++    buflen = MAX_PROBERESP_LEN;
++#ifdef CONFIG_WPS
++    if (hapd->wps_probe_resp_ie)
++        buflen += wpabuf_len(hapd->wps_probe_resp_ie);
++#endif /* CONFIG_WPS */
++#ifdef CONFIG_P2P
++    if (hapd->p2p_probe_resp_ie)
++        buflen += wpabuf_len(hapd->p2p_probe_resp_ie);
++#endif /* CONFIG_P2P */
++    if (hapd->conf->vendor_elements)
++        buflen += wpabuf_len(hapd->conf->vendor_elements);
++    resp = os_zalloc(buflen);
++    if (resp == NULL)
++        return NULL;
++
++    epos = ((u8 *) resp) + MAX_PROBERESP_LEN;
++
++    resp->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
++                       WLAN_FC_STYPE_BEACON);
++
++    os_memcpy(resp->da, sta_mac, ETH_ALEN);
++    os_memcpy(resp->sa, bssid, ETH_ALEN);
++    os_memcpy(resp->bssid, bssid, ETH_ALEN);
++
++    resp->u.probe_resp.beacon_int =
++        host_to_le16(hapd->iconf->beacon_int);
++
++    /* hardware or low-level driver will setup seq_ctrl and timestamp */
++    resp->u.probe_resp.capab_info =
++        host_to_le16(hostapd_own_capab_info(hapd, sta, 1));
++
++    pos = resp->u.probe_resp.variable;
++    *pos++ = WLAN_EID_SSID;
++    *pos++ = ssid_len;
++    os_memcpy(pos, ssid, ssid_len);
++    pos += ssid_len;
++
++    /* Supported rates */
++    pos = hostapd_eid_supp_rates(hapd, pos);
++
++    /* DS Params */
++    pos = hostapd_eid_ds_params(hapd, pos);
++
++    pos = hostapd_eid_country(hapd, pos, epos - pos);
++
++    /* Power Constraint element */
++    pos = hostapd_eid_pwr_constraint(hapd, pos);
++
++    /* ERP Information element */
++    pos = hostapd_eid_erp_info(hapd, pos);
++
++    /* Extended supported rates */
++    pos = hostapd_eid_ext_supp_rates(hapd, pos);
++
++    /* RSN, MDIE, WPA */
++    pos = hostapd_eid_wpa(hapd, pos, epos - pos);
++
++    pos = hostapd_eid_bss_load(hapd, pos, epos - pos);
++
++#ifdef CONFIG_IEEE80211N
++    pos = hostapd_eid_ht_capabilities(hapd, pos);
++    pos = hostapd_eid_ht_operation(hapd, pos);
++#endif /* CONFIG_IEEE80211N */
++
++    pos = hostapd_eid_ext_capab(hapd, pos);
++
++    pos = hostapd_eid_time_adv(hapd, pos);
++    pos = hostapd_eid_time_zone(hapd, pos);
++
++    pos = hostapd_eid_interworking(hapd, pos);
++    pos = hostapd_eid_adv_proto(hapd, pos);
++    pos = hostapd_eid_roaming_consortium(hapd, pos);
++
++    pos = hostapd_add_csa_elems(hapd, pos, (u8 *)resp,
++                    &hapd->iface->cs_c_off_proberesp);
++#ifdef CONFIG_IEEE80211AC
++    pos = hostapd_eid_vht_capabilities(hapd, pos);
++    pos = hostapd_eid_vht_operation(hapd, pos);
++#endif /* CONFIG_IEEE80211AC */
++
++    /* Wi-Fi Alliance WMM */
++    pos = hostapd_eid_wmm(hapd, pos);
++
++#ifdef CONFIG_WPS
++    if (hapd->conf->wps_state && hapd->wps_probe_resp_ie) {
++        os_memcpy(pos, wpabuf_head(hapd->wps_probe_resp_ie),
++              wpabuf_len(hapd->wps_probe_resp_ie));
++        pos += wpabuf_len(hapd->wps_probe_resp_ie);
++    }
++#endif /* CONFIG_WPS */
++
++#ifdef CONFIG_P2P
++    if ((hapd->conf->p2p & P2P_ENABLED) && is_p2p &&
++        hapd->p2p_probe_resp_ie) {
++        os_memcpy(pos, wpabuf_head(hapd->p2p_probe_resp_ie),
++              wpabuf_len(hapd->p2p_probe_resp_ie));
++        pos += wpabuf_len(hapd->p2p_probe_resp_ie);
++    }
++#endif /* CONFIG_P2P */
++#ifdef CONFIG_P2P_MANAGER
++    if ((hapd->conf->p2p & (P2P_MANAGE | P2P_ENABLED | P2P_GROUP_OWNER)) ==
++        P2P_MANAGE)
++        pos = hostapd_eid_p2p_manage(hapd, pos);
++#endif /* CONFIG_P2P_MANAGER */
++
++#ifdef CONFIG_HS20
++    pos = hostapd_eid_hs20_indication(hapd, pos);
++    pos = hostapd_eid_osen(hapd, pos);
++#endif /* CONFIG_HS20 */
++
++    if (hapd->conf->vendor_elements) {
++        os_memcpy(pos, wpabuf_head(hapd->conf->vendor_elements),
++              wpabuf_len(hapd->conf->vendor_elements));
++        pos += wpabuf_len(hapd->conf->vendor_elements);
++    }
++
++    *resp_len = pos - (u8 *) resp;
++    return (u8 *) resp;
++}
++
++u8 * get_beacon(struct hostapd_data *hapd, const u8 *sta_mac,
++        const u8 *bssid, const u8 *ssid, size_t ssid_len, size_t *beacon_len) {
++    u8 *beacon = NULL;
++    struct sta_info *sta = NULL;
++    sta = ap_get_sta(hapd, sta_mac);
++
++    beacon = generate_beacon_frame(hapd, sta, sta_mac, bssid, ssid, ssid_len, 0, beacon_len);
++
++    return beacon;
++}
++//--------------------
++
++
+ #endif /* CONFIG_NATIVE_WINDOWS */
+diff --git a/src/ap/beacon.h b/src/ap/beacon.h
+index 350b9fe..1b73cd1 100644
+--- a/src/ap/beacon.h
++++ b/src/ap/beacon.h
+@@ -22,4 +22,9 @@ int ieee802_11_build_ap_params(struct hostapd_data *hapd,
+ 			       struct wpa_driver_ap_params *params);
+ void ieee802_11_free_ap_params(struct wpa_driver_ap_params *params);
+ 
++//added by MagicCG
++u8 * get_beacon(struct hostapd_data *hapd, const u8 *sta_mac,
++        const u8 *bssid, const u8 *ssid, size_t ssid_len, size_t *beacon_len);
++//-----------------
++
+ #endif /* BEACON_H */
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index c39da61..8d6bd6b 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -12,6 +12,7 @@
+ #include "ap/sta_info.h"
+ 
+ void remove_odin_lvaps_all();
++void send_beacon(EtherAddress dst, EtherAddress bssid, String *my_ssid);
+ 
+ char *protocol_string[15] = {"table", "channel", "interval", "rxstats",
+ 						  "subscriptions", "debug", "report_mean", "spectral_scan",
+@@ -195,6 +196,42 @@ void finish_thread()
+  	pthread_join(odin_thread_id, NULL);
+ }
+ 
++void* beacon_thread(void *arg)
++{
++    c_iterator iter, end;
++    EtherAddress *dst;
++    OdinStationState *state;
++    while (1) {
++        iter = c_map_begin(_sta_mapping_table);
++        end = c_map_end(_sta_mapping_table);
++
++        for(; !ITER_EQUAL(iter, end); ITER_INC(iter))
++        {
++            dst = (EtherAddress *)(((c_ppair)ITER_REF(iter))->first);
++            state = (OdinStationState *)(((c_ppair)ITER_REF(iter))->second);
++            send_beacon(*dst, state->_vap_bssid, &(state->_vap_ssids));
++            wpa_printf(MSG_INFO, "send beacon success!");
++        }
++
++        usleep(interfaces->iface[0]->bss[0]->iconf->beacon_int*1000);
++    }
++}
++
++int beacon_thread_init()
++{
++    if((pthread_create(&beacon_thread_id, NULL, (void *) beacon_thread, NULL)) != 0) {
++        wpa_printf(MSG_ERROR, "Create beacon pthread error!");
++        return 0;
++    }
++    return 1;
++}
++
++void finish_beacon_thread()
++{
++    pthread_cancel(beacon_thread_id);
++    pthread_join(beacon_thread_id, NULL);
++}
++
+ void cleanup_lvap(c_pmap rx_stats, int timeout)
+ {
+     c_iterator end, iter;
+@@ -518,6 +555,26 @@ static void send_probe_resp(EtherAddress dst, EtherAddress bssid, String *my_ssi
+ //	os_free(resp);
+ }
+ 
++void send_beacon(EtherAddress dst, EtherAddress bssid, String *my_ssid)
++{
++    u8 *beacon;
++    size_t beacon_len;
++
++    struct hostapd_data *hapd = interfaces->iface[0]->bss[0];
++    int i;
++
++    beacon = get_beacon(hapd, dst.mac_addr, bssid.mac_addr, my_ssid->str, my_ssid->length-1, &beacon_len);
++    if (beacon == NULL)
++            return;
++
++//  wpa_printf(MSG_INFO, "handle_send_beacon: send start");
++    if ((hapd->driver->send_mntr(hapd->drv_priv, beacon, beacon_len)) < 0)
++        wpa_printf(MSG_INFO, "handle_send_beacon: send failed");
++//  if (hostapd_drv_send_mlme(hapd, resp, resp_len, 0) < 0)
++//      wpa_printf(MSG_INFO, "handle_probe_resp: send failed");
++//  wpa_printf(MSG_INFO, "handle_send_beacon: send success");
++    os_free(beacon);
++}
+ 
+ void parse_odin_protocol(char *buf, int reply_sock)
+ {
+@@ -1003,6 +1060,7 @@ void odin_protocol_init(struct hapd_interfaces *ifaces)
+ 	params_init();
+ 	ping_thread_init();
+ 	cleanup_thread_init();
++    beacon_thread_init();
+ 	client_sock_init();
+ 	odin_protocol_init_monitor_interface();
+ }
+@@ -1012,6 +1070,7 @@ void odin_protocol_deinit()
+ 	remove_odin_lvaps_all();
+ 	odin_protocol_deinit_monitor_interface();
+ 	client_sock_deinit();
++	finish_beacon_thread();
+ 	finish_cleanup_thread();
+ 	finish_thread();
+ 	params_deinit();
+diff --git a/src/odin/odinagent.h b/src/odin/odinagent.h
+index 0ae7b1f..09260c5 100644
+--- a/src/odin/odinagent.h
++++ b/src/odin/odinagent.h
+@@ -140,6 +140,7 @@ extern char *protocol_string[15];
+ //global thread id
+ pthread_t odin_thread_id;
+ pthread_t cleanup_thread_id;
++pthread_t beacon_thread_id;
+ int server_sockfd, odin_udp_sockfd;
+ c_pvector client_sock_vector;
+ 
+-- 
+1.9.4.msysgit.2
+

@@ -1,0 +1,63 @@
+From 336d9b574d8a140ce81389313d18925999aab274 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Sun, 1 Nov 2015 21:10:53 +0800
+Subject: [PATCH] =?UTF-8?q?modify=20the=20odinagent.c=20to=20update=20the?=
+ =?UTF-8?q?=20OpenWrt=20ssid=20with=20the=20=E2=80=9Cswan=E2=80=9D=20netwo?=
+ =?UTF-8?q?rk=20ssid?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 30 +++++++++++++++++++++---------
+ 1 file changed, 21 insertions(+), 9 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 0952539..37e670c 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -904,20 +904,32 @@ static u8 * hostapd_gen_probe_resp_odin(struct hostapd_data *hapd,
+ 
+ static void send_probe_resp(EtherAddress dst, EtherAddress bssid, String *my_ssid)
+ {
+-	u8 *resp;
+-	size_t resp_len;
++//	u8 *resp;
++//	size_t resp_len;
+ 	struct hostapd_data *hapd = interfaces->iface[0]->bss[0];
+ 
+-	resp = hostapd_gen_probe_resp_odin(hapd, NULL,
+-									dst, bssid, my_ssid, 0, &resp_len, 0);
+-	if (resp == NULL)
+-			return;
++//	resp = hostapd_gen_probe_resp_odin(hapd, NULL,
++//									dst, bssid, my_ssid, 0, &resp_len, 0);
++//	if (resp == NULL)
++//			return;
++	hapd->conf->ssid.ssid_len = my_ssid->length;
++	if (hapd->conf->ssid.ssid_len > HOSTAPD_MAX_SSID_LEN ||
++			hapd->conf->ssid.ssid_len < 1) {
+ 
++	}
++	else {
++		os_memcpy(hapd->conf->ssid.ssid, my_ssid->str, hapd->conf->ssid.ssid_len);
++		hapd->conf->ssid.ssid_set = 1;
++		hapd->conf->num_accept_mac = 0;
++		hapd->conf->macaddr_acl = DENY_UNLESS_ACCEPTED;
++		hapd->conf->accept_mac = NULL;
++		ieee802_11_set_beacon(hapd);
++	}
+ //	if ((hapd->driver->send_mntr(hapd->drv_priv, resp, resp_len)) < 0)
+ //		wpa_printf(MSG_INFO, "handle_probe_resp: send failed");
+-	if (hostapd_drv_send_mlme(hapd, resp, resp_len, 0) < 0)
+-		wpa_printf(MSG_INFO, "handle_probe_resp: send failed");
+-	os_free(resp);
++//	if (hostapd_drv_send_mlme(hapd, resp, resp_len, 0) < 0)
++//		wpa_printf(MSG_INFO, "handle_probe_resp: send failed");
++//	os_free(resp);
+ }
+ 
+ static void send_beacon(EtherAddress dst, EtherAddress bssid, String *my_ssid)
+-- 
+1.9.4.msysgit.2
+

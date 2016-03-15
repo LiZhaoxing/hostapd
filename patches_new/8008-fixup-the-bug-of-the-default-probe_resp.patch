@@ -1,0 +1,38 @@
+From 58a82925f188e446fb8cf13c699f61238fe03c4a Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Thu, 29 Oct 2015 09:33:12 +0800
+Subject: [PATCH] fixup the bug of the default probe_resp
+
+---
+ src/ap/beacon.c | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/src/ap/beacon.c b/src/ap/beacon.c
+index f3851b3..e85a225 100644
+--- a/src/ap/beacon.c
++++ b/src/ap/beacon.c
+@@ -669,9 +669,19 @@ void handle_probe_req(struct hostapd_data *hapd,
+ 		return;
+ 	}
+ #endif /* CONFIG_TESTING_OPTIONS */
++	// modified by MagicCG
++	// resp = hostapd_gen_probe_resp(hapd, sta, mgmt, elems.p2p != NULL,
++    //			&resp_len);
++	if ((hapd->conf->macaddr_acl == DENY_UNLESS_ACCEPTED) &&
++		(hapd->conf->num_accept_mac == 1) &&
++		(os_memcmp(hapd->conf->accept_mac->addr, mgmt->sa, ETH_ALEN) != 0)) {
++		return;
++	}
++	else {
++		resp = hostapd_gen_probe_resp(hapd, sta, mgmt, elems.p2p != NULL,
++					&resp_len);
++	}// modified by MagicCG
+ 
+-	resp = hostapd_gen_probe_resp(hapd, sta, mgmt, elems.p2p != NULL,
+-				      &resp_len);
+ 	if (resp == NULL)
+ 		return;
+ 
+-- 
+1.9.4.msysgit.2
+

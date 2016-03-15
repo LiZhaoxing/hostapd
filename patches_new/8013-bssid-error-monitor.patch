@@ -1,0 +1,160 @@
+From 49c76eca67bc625565504a03a3ee31c1222902ce Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Sun, 8 Nov 2015 10:01:27 +0800
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E6=AD=A3bssid=20error=E5=92=8Cmonitor?=
+ =?UTF-8?q?=E7=BC=93=E5=86=B2=E5=8C=BA=E4=B8=8D=E5=A4=9F=E5=A4=A7=E7=9A=84?=
+ =?UTF-8?q?=E9=97=AE=E9=A2=98?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 26 +++++++++++++++++++-------
+ src/odin/odinagent.h | 24 ++----------------------
+ 2 files changed, 21 insertions(+), 29 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 207dca2..5cebbc1 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -393,6 +393,8 @@ int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress vap_bssid, Str
+ 	state = (OdinStationState *)malloc(sizeof(OdinStationState) + (ssid->length)*sizeof(unsigned char));
+ 	//state->_vap_bssid = vap_bssid;
+ 	//state->_sta_ip_addr_v4 = sta_ip;
++	wpa_printf(MSG_INFO, "vap bssid into add_vap");
++	wpa_printf(MSG_INFO, MACSTR, MAC2STR(vap_bssid.mac_addr));
+ 	memcpy(state->_vap_bssid.mac_addr, vap_bssid.mac_addr, ETH_ALEN);
+ 	memcpy(state->_sta_ip_addr_v4.ip, sta_ip.ip, IP_ALEN);
+ 	//state->_vap_ssids = ssid; // _vap_ssids needed to be freed when the lvap is removed
+@@ -404,11 +406,13 @@ int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress vap_bssid, Str
+ 
+ 	p = (c_pair *)malloc(sizeof(c_pair));
+ 	*p = c_make_pair(sta_mac_p, state);
+-	c_map_insert(_sta_mapping_table, p);
++
+ 	//_sta_mapping_table.set(sta_mac, state);
+ 	wpa_printf(MSG_INFO, "ssid address %x", ssid);
+ 	wpa_printf(MSG_INFO, "state's _vap_ssids address %x", &(state->_vap_ssids));
+ 	//now registing the hostapd beacon frame
++    wpa_printf(MSG_INFO, "state's bssid after memcpy");
++    wpa_printf(MSG_INFO, MACSTR, MAC2STR(state->_vap_bssid.mac_addr));
+ 	bss_config = add_bss_config_file(ctrl_config_path, state, sta_mac_p);
+ 	wpa_printf(MSG_INFO, "add_vap : %s", bss_config);
+ 	hostapd_add_iface_odin(interfaces, bss_config);
+@@ -436,8 +440,13 @@ int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress vap_bssid, Str
+ 			    NULL,
+ 			    sta->flags, sta->qosinfo)) {
+ 		wpa_printf(MSG_INFO, "添加不成功");
++		free(bss_config);
++		free(state);
++		free(sta_mac_p);
++		free(p);
++		return -1;
+ 	}
+-
++    c_map_insert(_sta_mapping_table, p);
+ 	free(bss_config);
+ 	sprintf(ovs_add_port_command, "ovs-vsctl add-port %s %s", OVS_BRIDGE_NAME, state->_vap_ssids.str);
+ 	system(ovs_add_port_command);
+@@ -1059,7 +1068,9 @@ void parse_odin_protocol(char *buf, int reply_sock)
+     		COPY_STR2MAC(tp, vap_bssid.mac_addr);
+     		//sscanf(tp, MACSTR, vap_bssid.mac_addr, vap_bssid.mac_addr+1, vap_bssid.mac_addr+2,
+     		//		vap_bssid.mac_addr+3, vap_bssid.mac_addr+4, vap_bssid.mac_addr+5);
+-
++    		wpa_printf(MSG_INFO, "copy src: %s", tp);
++            wpa_printf(MSG_INFO, "vap bssid after copy");
++            wpa_printf(MSG_INFO, MACSTR, MAC2STR(vap_bssid.mac_addr));
+     		tp = value;
+     		while (strsep(&value, " "))
+     		        num_ssid++;
+@@ -1073,7 +1084,8 @@ void parse_odin_protocol(char *buf, int reply_sock)
+     			memcpy(vap_ssid->str, tp, vap_ssid->length);
+     			tp += (strlen(tp) + 1);
+     		}
+-
++    		wpa_printf(MSG_INFO, "vap bssid before add_vap");
++    		wpa_printf(MSG_INFO, MACSTR, MAC2STR(vap_bssid.mac_addr));
+     		add_vap (sta_mac, sta_ip, vap_bssid, vap_ssid);
+     		if (vap_ssid != NULL) {
+     			free(vap_ssid);
+@@ -1700,7 +1712,7 @@ void recv_probe_request(unsigned char *buf)
+ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ {
+ 	int len;
+-	unsigned char buf[3000];
++	unsigned char buf[65535];
+ 	struct ieee80211_radiotap_iterator iter;
+ 	int ret;
+ 	int datarate = 0, ssi_signal = 0, noise = 0;
+@@ -1758,6 +1770,7 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 			break;
+ 		case IEEE80211_RADIOTAP_DBM_ANTNOISE:
+ 			noise = (s8) *iter.this_arg;
++			break;
+ 		}
+ 	}
+ 
+@@ -1779,14 +1792,13 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 			return;
+ 		}
+ 		if (stype == WLAN_FC_STYPE_AUTH) {
+-			recv_auth(buf_p);
++			//recv_auth(buf_p);
+ 			return;
+ 		}
+ 		break;
+ 	case WLAN_FC_TYPE_CTRL:
+ 		break;
+ 	case WLAN_FC_TYPE_DATA:
+-
+ 		break;
+ 	}
+ 
+diff --git a/src/odin/odinagent.h b/src/odin/odinagent.h
+index 5c75c25..92ddfcf 100644
+--- a/src/odin/odinagent.h
++++ b/src/odin/odinagent.h
+@@ -35,27 +35,6 @@
+ #define IPSTR	"%d.%d.%d.%d"
+ #endif
+ 
+-static inline unsigned char a2x(const char c) {
+-	switch (c) {
+-	case '0' ... '9':
+-		return (unsigned char) atoi(&c);
+-	case 'a' ... 'f':
+-		return 0xa + (c - 'a');
+-	case 'A' ... 'F':
+-		return 0xa + (c - 'A');
+-	default:
+-		goto error;
+-	}
+-	error: exit(0);
+-}
+-
+-static inline void str2mac(const char *str, u8 *mac)
+-{
+-	int i;
+-	for (i = 0; i < ETH_ALEN; i++) {
+-	  mac[i] = (a2x(str[i*3]) << 4) + a2x(str[i*3 + 1]);
+-	}
+-}
+ static inline void str2ip(const char *str, u8 *ip)
+ {
+ 	int i;
+@@ -66,10 +45,11 @@ static inline void str2ip(const char *str, u8 *ip)
+ 	  p++;
+ 	}
+ }
++
+ /*convert a string to a macaddress data type.*/
+ #define COPY_STR2MAC(str, mac)  \
+ do { \
+-	str2mac(str, mac);\
++    hwaddr_aton(str, mac);\
+ } while(0)
+ /*convert a string to a ip data type.*/
+ #define COPY_STR2IP(str, ip)  \
+-- 
+1.9.4.msysgit.2
+

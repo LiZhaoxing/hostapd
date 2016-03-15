@@ -1,0 +1,32 @@
+From 693a49e9ddd91dfd94db2012ebc9567bd3eabd4e Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Fri, 8 Jan 2016 18:52:19 +0800
+Subject: [PATCH] add the disassoc_low_ack=0 config
+
+---
+ src/odin/odinagent.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 7106466..40534b5 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -355,6 +355,15 @@ char *add_bss_config_file(const char *ctrl_config_path, OdinStationState *state,
+             fputs(buf_write, fp_write);
+             continue;
+         }
++        else if (strstr(buf_read_pos, "disassoc_low_ack=") != NULL) {
++            strsep(&buf_read_pos, "=");
++
++            sprintf(buf_write, "%s=%d\n", buf_read, 0);
++
++            wpa_printf(MSG_INFO, "add_bss_config_file : %s", buf_write);
++            fputs(buf_write, fp_write);
++            continue;
++        }
+         else if (strstr(buf_read_pos, "bridge=") != NULL) {
+             continue;
+         }
+-- 
+1.9.4.msysgit.2
+

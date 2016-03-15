@@ -1,0 +1,105 @@
+From b6bce9d53ca12244e637525f912b5afa277ff748 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Wed, 2 Dec 2015 19:19:17 +0800
+Subject: [PATCH] =?UTF-8?q?fix=20the=20bug=EF=BC=9Asome=20client=20doesn't?=
+ =?UTF-8?q?=20send=20probe=20request=20with=20ssid?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 63 ++++++++++------------------------------------------
+ 1 file changed, 12 insertions(+), 51 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index cc4fc6a..3d6af69 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -1180,6 +1180,8 @@ const OdinStationState * get_state_by_sta_mac(EtherAddress sta_mac)
+ void recv_auth(unsigned char *buf)
+ {
+ 	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *) buf;
++	unsigned char ssid[HOSTAPD_MAX_SSID_LEN + 1];
++	char tmp[SSID_MAX_LEN];
+ 	u16 auth_alg, auth_transaction, status_code;
+ 	EtherAddress sa;
+ 	const OdinStationState *state;
+@@ -1189,57 +1191,16 @@ void recv_auth(unsigned char *buf)
+ 	auth_alg = le_to_host16(mgmt->u.auth.auth_alg);
+ 	auth_transaction = le_to_host16(mgmt->u.auth.auth_transaction);
+ 	status_code = le_to_host16(mgmt->u.auth.status_code);
+-
++//	wpa_printf(MSG_INFO, "recv auth");
+ 	if ((auth_transaction == 1) || (auth_transaction == 3)) {
+-		memcpy(&sa, mgmt->sa, ETH_ALEN);
+-		state = get_state_by_sta_mac(sa);
+-		if (state != NULL) {
+-			wpa_printf(MSG_INFO, "station");
+-			wpa_printf(MSG_INFO, MACSTR, MAC2STR(sa.mac_addr));
+-			wpa_printf(MSG_INFO, "frame bssid");
+-			wpa_printf(MSG_INFO, MACSTR, MAC2STR(mgmt->bssid));
+-			wpa_printf(MSG_INFO, "frame da");
+-			wpa_printf(MSG_INFO, MACSTR, MAC2STR(mgmt->da));
+-			wpa_printf(MSG_INFO, "state bssid");
+-			wpa_printf(MSG_INFO, MACSTR, MAC2STR(state->_vap_bssid.mac_addr));
+-			wpa_printf(MSG_INFO, "state ip");
+-			wpa_printf(MSG_INFO, IPSTR, IP2STR(state->_sta_ip_addr_v4.ip));
+-			wpa_printf(MSG_INFO, "state ssid");
+-			wpa_printf(MSG_INFO, "%s", state->_vap_ssids.str);
+-			if (memcmp(&(state->_vap_bssid), mgmt->bssid, ETH_ALEN) != 0) {
+-				//res = hostapd_drv_sta_deauth(interfaces->iface[0]->bss[0],
+-				//		mgmt->da, WLAN_REASON_DEAUTH_LEAVING);
+-				//if (res == 0) {
+-				//	wpa_printf(MSG_INFO, "发送DEAUTH成功");
+-				//}
+-				//else {
+-				//	wpa_printf(MSG_INFO, "发送DEAUTH失败");
+-				//}
+-
+-				/*
+-				int i, j;
+-				struct hostapd_iface *hapd_iface;
+-				for (i = 0; i < interfaces->count; i++) {
+-					hapd_iface = interfaces->iface[i];
+-					if (hapd_iface == NULL)
+-						return;
+-					for (j = 1; hapd_iface->num_bss; j++) {
+-						if (hapd_iface->bss[j]->conf->accept_mac)
+-						wpa_printf(MSG_INFO, "delete %s", hapd_iface->conf->bss[1]->iface);
+-						hostapd_remove_iface_odin(interfaces, hapd_iface->conf->bss[1]->iface);
+-					}
+-				}
+-				sta = ap_get_sta(hapd, mgmt->da);
+-				if (!sta) {
+-					wpa_printf(MSG_INFO, "set sta state: STA " MACSTR " not found",
+-						MAC2STR(mgmt->da));
+-					return;
+-				}
+-				sta->flags |= WLAN_STA_AUTH;
+-				wpa_printf(MSG_INFO, "set sta state success");
+-				*/
+-			}
+-		}
++//	    wpa_printf(MSG_INFO, "recv auth request");
++	    if (os_memcmp(mgmt->bssid, interfaces->iface[0]->bss[0]->own_addr, ETH_ALEN) == 0) {
++	        os_memcpy(ssid, interfaces->iface[0]->bss[0]->conf->ssid.ssid, interfaces->iface[0]->bss[0]->conf->ssid.ssid_len);
++	        ssid[interfaces->iface[0]->bss[0]->conf->ssid.ssid_len] = '\0';
++	        sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x %s\n", MAC2STR(mgmt->sa), ssid);
++//	        wpa_printf(MSG_INFO, "recv auth request : %s", tmp);
++	        udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
++	    }
+ 	}
+ }
+ 
+@@ -1375,7 +1336,7 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 			return;
+ 		}
+ 		if (stype == WLAN_FC_STYPE_AUTH) {
+-			//recv_auth(buf_p);
++			recv_auth(buf_p);
+ 			return;
+ 		}
+ 		break;
+-- 
+1.9.4.msysgit.2
+

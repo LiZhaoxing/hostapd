@@ -1,0 +1,69 @@
+From dff682611485a9b31f2adf6dacc98d475b5f2419 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Mon, 19 Oct 2015 15:54:28 +0800
+Subject: [PATCH] =?UTF-8?q?=E6=8E=A7=E5=88=B6=E5=99=A8=E5=85=B3=E9=97=ADcl?=
+ =?UTF-8?q?ose=E4=B9=8B=E5=90=8E=E7=A7=BB=E9=99=A4=E6=89=80=E6=9C=89?=
+ =?UTF-8?q?=E7=9A=84Lvap=E4=BF=A1=E6=81=AF?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 38401b5..0b54d2e 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -11,6 +11,8 @@
+ #include "ap/ieee802_11.h"
+ #include "ap/sta_info.h"
+ 
++void remove_odin_lvaps_all();
++
+ char *protocol_string[15] = {"table", "channel", "interval", "rxstats",
+ 						  "subscriptions", "debug", "report_mean", "spectral_scan",
+ 						  "add_vap", "set_vap", "remove_vap", "send_probe_response",
+@@ -1092,6 +1094,7 @@ void odin_protocol_handler(int sock, void *eloop_ctx, void *sock_ctx)
+ 			}
+ 		}
+ 		wpa_printf(MSG_INFO, "Client has left");
++		remove_odin_lvaps_all();
+ 	    //printf("Client %d(socket) has left\n", fd);
+ 	}
+ }
+@@ -1269,6 +1272,8 @@ void remove_odin_lvaps_all()
+ 	    }
+ 	}
+ 	vector_deinit(&ssids);*/
++
++	/*
+ 	int i, j;
+ 	struct hostapd_iface *hapd_iface;
+ 	char ovs_del_port_command[50];
+@@ -1284,6 +1289,21 @@ void remove_odin_lvaps_all()
+ 			system(ovs_del_port_command);
+ 			hostapd_remove_iface_odin(interfaces, hapd_iface->conf->bss[1]->iface);
+ 		}
++	}*/
++
++	EtherAddress *sta_mac;
++
++	if (c_map_size(_sta_mapping_table) == 0) {
++		return;
++	}
++	c_iterator erase = c_map_begin(_sta_mapping_table);
++	while (1) {
++		sta_mac = (EtherAddress *)(((c_ppair)ITER_REF(erase))->first);
++		remove_vap(sta_mac);
++		if (c_map_size(_sta_mapping_table) == 0) {
++			break;
++		}
++		erase = c_map_begin(_sta_mapping_table);
+ 	}
+ }
+ 
+-- 
+1.9.4.msysgit.2
+

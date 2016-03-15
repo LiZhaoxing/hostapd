@@ -1,0 +1,57 @@
+From 65ced35bc36b909e3195e8e094eed1743921cc1b Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Thu, 7 Jan 2016 15:18:30 +0800
+Subject: [PATCH] modify some place where may cause the reboot of AP
+
+---
+ src/odin/odinagent.c | 13 ++++---------
+ 1 file changed, 4 insertions(+), 9 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index a2677a4..38dc872 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -1283,7 +1283,7 @@ void recv_auth(unsigned char *buf, int len)
+ 	auth_transaction = le_to_host16(mgmt->u.auth.auth_transaction);
+ 	status_code = le_to_host16(mgmt->u.auth.status_code);
+ //	wpa_printf(MSG_INFO, "recv auth");
+-	if ((auth_transaction == 1) || (auth_transaction == 3)) {
++	if (auth_transaction == 1) {
+ //	    wpa_printf(MSG_INFO, "recv auth request");
+ 	    if (os_memcmp(mgmt->bssid, interfaces->iface[0]->bss[0]->own_addr, ETH_ALEN) == 0) {
+ 	        os_memcpy(ssid, interfaces->iface[0]->bss[0]->conf->ssid.ssid, interfaces->iface[0]->bss[0]->conf->ssid.ssid_len);
+@@ -1310,8 +1310,7 @@ void recv_probe_request(unsigned char *buf, int buf_p_len)
+     size_t ie_len;
+ 
+     ie = mgmt->u.probe_req.variable;
+-    if (buf_p_len < IEEE80211_HDRLEN + sizeof(mgmt->u.probe_req))
+-        return;
++
+     ie_len = buf_p_len - (IEEE80211_HDRLEN + sizeof(mgmt->u.probe_req));
+ 
+     if (ieee802_11_parse_elems(ie, ie_len, &elems, 0) == ParseFailed) {
+@@ -1450,6 +1449,8 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+                 update_rx_stats(hdr->addr2, datarate, ssi_signal, noise);
+         //      wpa_printf(MSG_INFO, "odin nl80211: rate is %d Mbps, rssi is %d dbm.", datarate, ssi_signal);
+             }
++            if (len_buf_p < 24)
++                return;
+             if (stype == WLAN_FC_STYPE_PROBE_REQ) {
+                 //wpa_printf(MSG_INFO, "recvprobe : recv the mgmt, type : %d, stype : %d", WLAN_FC_GET_TYPE(fc), stype);
+                 recv_probe_request(buf_p, len_buf_p);
+@@ -1470,12 +1471,6 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+         //      wpa_printf(MSG_INFO, "odin nl80211: rate is %d Mbps, rssi is %d dbm.", datarate, ssi_signal);
+             }
+ 	    }
+-	    else {
+-            if ((datarate != 0) && (ssi_signal != 0)) {
+-                update_rx_stats(hdr->addr1, datarate, ssi_signal, noise);
+-        //      wpa_printf(MSG_INFO, "odin nl80211: rate is %d Mbps, rssi is %d dbm.", datarate, ssi_signal);
+-            }
+-	    }
+ 		break;
+ 	}
+ 
+-- 
+1.9.4.msysgit.2
+

@@ -1,0 +1,87 @@
+From 5b581d81b9e5a9895980fa8daacb1c25605c96bb Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Mon, 9 Nov 2015 16:17:17 +0800
+Subject: [PATCH] fixup own send beacon
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+修复 自己发送的beacon帧的发送地址和BSSID不一致的问题
+---
+ src/odin/odinagent.c | 31 +++++++++++++++++++++++++------
+ src/odin/odinagent.h |  1 +
+ 2 files changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 5cebbc1..6356861 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -209,7 +209,7 @@ void* beacon_thread(void *arg)
+ 			dst = (EtherAddress *)(((c_ppair)ITER_REF(iter))->first);
+ 			state = (OdinStationState *)(((c_ppair)ITER_REF(iter))->second);
+ 			send_beacon(*dst, state->_vap_bssid, &(state->_vap_ssids));
+-			wpa_printf(MSG_INFO, "send beacon success!");
++//			wpa_printf(MSG_INFO, "send beacon success!");
+ 		}
+ 
+ 		usleep(100*1000);
+@@ -946,20 +946,39 @@ static void send_probe_resp(EtherAddress dst, EtherAddress bssid, String *my_ssi
+ 
+ static void send_beacon(EtherAddress dst, EtherAddress bssid, String *my_ssid)
+ {
+-	u8 *resp;
+-	size_t resp_len;
++	u8 *resp, *beacon;
++	size_t resp_len, beacon_len;
++	u8 radiotap_h[RADIOTAP_HEADER_LEN] = {0x00, 0x00, 0x0d, 0x00,
++	                                      0x04, 0x80, 0x02, 0x00,
++	                                      0x02, 0x00, 0x00, 0x00, 0x00};
+ 	struct hostapd_data *hapd = interfaces->iface[0]->bss[0];
++	int i;
++
++    for (i = 1; i < interfaces->iface[0]->num_bss; i++) {
++        if (os_memcmp(interfaces->iface[0]->bss[i]->own_addr, bssid.mac_addr, ETH_ALEN) == 0) {
++            hapd = interfaces->iface[0]->bss[i];
++            break;
++        }
++    }
+ 
+ 	resp = hostapd_gen_probe_resp_odin(hapd, NULL,
+ 									dst, bssid, my_ssid, 0, &resp_len, 1);
+ 	if (resp == NULL)
+ 			return;
+ 
+-//	if ((hapd->driver->send_mntr(hapd->drv_priv, resp, resp_len)) < 0)
++	beacon_len = RADIOTAP_HEADER_LEN + resp_len;
++	beacon = os_zalloc(beacon_len);
++	os_memcpy(beacon, radiotap_h, RADIOTAP_HEADER_LEN);
++	os_memcpy(beacon + RADIOTAP_HEADER_LEN, resp, resp_len);
++
++//	wpa_printf(MSG_INFO, "handle_send_beacon: send start");
++	if ((hapd->driver->send_mntr(hapd->drv_priv, beacon, beacon_len)) < 0)
++	    wpa_printf(MSG_INFO, "handle_send_beacon: send failed");
++//	if (hostapd_drv_send_mlme(hapd, resp, resp_len, 0) < 0)
+ //		wpa_printf(MSG_INFO, "handle_probe_resp: send failed");
+-	if (hostapd_drv_send_mlme(hapd, resp, resp_len, 0) < 0)
+-		wpa_printf(MSG_INFO, "handle_probe_resp: send failed");
++//	wpa_printf(MSG_INFO, "handle_send_beacon: send success");
+ 	os_free(resp);
++	os_free(beacon);
+ }
+ 
+ void parse_odin_protocol(char *buf, int reply_sock)
+diff --git a/src/odin/odinagent.h b/src/odin/odinagent.h
+index 92ddfcf..6aed3a1 100644
+--- a/src/odin/odinagent.h
++++ b/src/odin/odinagent.h
+@@ -29,6 +29,7 @@
+ #define SSID_MAX_LEN		50
+ #define SIGNAL_OFFSET		256
+ #define OVS_BRIDGE_NAME		"br1"
++#define RADIOTAP_HEADER_LEN 13
+ 
+ #ifndef IP2STR
+ #define IP2STR(a) a[0], a[1], a[2], a[3]
+-- 
+1.9.4.msysgit.2
+

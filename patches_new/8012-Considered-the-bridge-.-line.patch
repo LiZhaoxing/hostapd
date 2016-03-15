@@ -1,0 +1,39 @@
+From cf8c4b3c930d57ab06e8dbe99b689913e1d0d907 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Sun, 1 Nov 2015 21:29:42 +0800
+Subject: [PATCH] =?UTF-8?q?Considered=20the=20=E2=80=9Cbridge=3D...?=
+ =?UTF-8?q?=E2=80=9D=20line?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 37e670c..207dca2 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -303,6 +303,9 @@ char *add_bss_config_file(const char *ctrl_config_path, OdinStationState *state,
+             fputs(buf_write, fp_write);
+             continue;
+         }
++        else if (strstr(buf_read_pos, "bridge=") != NULL) {
++            continue;
++        }
+ 
+ 
+         sprintf(buf_write, "%s", buf_read);
+@@ -366,7 +369,7 @@ int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress vap_bssid, Str
+ 	OdinStationState *state;
+ 	EtherAddress *sta_mac_p;
+ 	char *bss_config;
+-	char *ctrl_config_path = "/root/hostapd-phy0.conf";
++	char *ctrl_config_path = "/var/run/hostapd-phy0.conf";
+ 	struct sta_info *sta;
+ 	struct hostapd_data *hapd;
+ 	int i;
+-- 
+1.9.4.msysgit.2
+

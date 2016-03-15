@@ -1,0 +1,104 @@
+From 085163451dd4e3e6ea61f1e85ca29251f3b7426c Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Thu, 26 Nov 2015 09:29:53 +0800
+Subject: [PATCH] =?UTF-8?q?=E6=B7=BB=E5=8A=A0=E4=BA=86idle=20rx=20stat?=
+ =?UTF-8?q?=E7=9A=84=E6=A3=80=E6=9F=A5?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 49 +++++++++++++++++++++++++++++++++++++++++++++++++
+ src/odin/odinagent.h |  2 +-
+ 2 files changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index b73815c..a234c5f 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -194,6 +194,53 @@ void finish_thread()
+  	pthread_join(odin_thread_id, NULL);
+ }
+ 
++void cleanup_lvap(c_pmap rx_stats, int timeout)
++{
++    c_iterator end, iter;
++    StationStats *stat;
++    int age;
++
++    end = c_map_end(_rx_stats);
++    iter = c_map_begin(_rx_stats);
++
++    for(; !ITER_EQUAL(iter, end); ITER_INC(iter))
++    {
++        stat = (StationStats *)( ((c_ppair)ITER_REF(iter))->second );
++        age = time(NULL) - stat->_last_received;
++        if (age > timeout) {
++            free(((c_ppair)ITER_REF(iter))->first);
++            free(((c_ppair)ITER_REF(iter))->second);
++            ((c_ppair)ITER_REF(iter))->first = NULL;
++            ((c_ppair)ITER_REF(iter))->second = NULL;
++            free(ITER_REF(iter));
++            c_map_erase(rx_stats, iter);
++        }
++    }
++}
++
++void* cleanup_thread(void *arg)
++{
++    while (1) {
++        cleanup_lvap(_rx_stats, 30);
++        sleep(50);
++    }
++}
++
++int cleanup_thread_init()
++{
++    if((pthread_create(&cleanup_thread_id, NULL, (void *) cleanup_thread, NULL)) != 0) {
++        wpa_printf(MSG_ERROR, "Create cleanup pthread error!");
++        return 0;
++    }
++    return 1;
++}
++
++void finish_cleanup_thread()
++{
++    pthread_cancel(cleanup_thread_id);
++    pthread_join(cleanup_thread_id, NULL);
++}
++
+ protocol_type protocol_string_to_enum(const char *protocol_str)
+ {
+ 	int i;
+@@ -942,6 +989,7 @@ void odin_protocol_init(struct hapd_interfaces *ifaces)
+ 	udp_sockfd_init();
+ 	params_init();
+ 	ping_thread_init();
++	cleanup_thread_init();
+ 	client_sock_init();
+ 	odin_protocol_init_monitor_interface();
+ }
+@@ -951,6 +999,7 @@ void odin_protocol_deinit()
+ 	remove_odin_lvaps_all();
+ 	odin_protocol_deinit_monitor_interface();
+ 	client_sock_deinit();
++	finish_cleanup_thread();
+ 	finish_thread();
+ 	params_deinit();
+ 	udp_sockfd_deinit();
+diff --git a/src/odin/odinagent.h b/src/odin/odinagent.h
+index 6aed3a1..34000de 100644
+--- a/src/odin/odinagent.h
++++ b/src/odin/odinagent.h
+@@ -139,7 +139,7 @@ extern char *protocol_string[15];
+ 
+ //global thread id
+ pthread_t odin_thread_id;
+-pthread_t beacon_thread_id;
++pthread_t cleanup_thread_id;
+ int server_sockfd, odin_udp_sockfd;
+ c_pvector client_sock_vector;
+ 
+-- 
+1.9.4.msysgit.2
+
