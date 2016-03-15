@@ -15,6 +15,7 @@
 #include "utils/common.h"
 #include "utils/eloop.h"
 #include "utils/uuid.h"
+#include "utils/build_features.h"
 #include "crypto/random.h"
 #include "crypto/tls.h"
 #include "common/version.h"
@@ -28,6 +29,9 @@
 #include "eap_register.h"
 #include "ctrl_iface.h"
 
+// added by MagicCG
+#include "odin/odinagent.h"
+
 
 struct hapd_global {
 	void **drv_priv;
@@ -35,6 +39,8 @@ struct hapd_global {
 };
 
 static struct hapd_global global;
+static int daemonize = 0;
+static char *pid_file = NULL;
 
 
 #ifndef CONFIG_NO_HOSTAPD_LOGGER
@@ -140,6 +146,14 @@ static void hostapd_logger_cb(void *ctx, const u8 *addr, unsigned int module,
 }
 #endif /* CONFIG_NO_HOSTAPD_LOGGER */
 
+static void hostapd_setup_complete_cb(void *ctx)
+{
+	if (daemonize && os_daemonize(pid_file)) {
+		perror("daemon");
+		return;
+	}
+	daemonize = 0;
+}
 
 /**
  * hostapd_driver_init - Preparate driver interface
@@ -157,6 +171,8 @@ static int hostapd_driver_init(struct hostapd_iface *iface)
 		wpa_printf(MSG_ERROR, "No hostapd driver wrapper available");
 		return -1;
 	}
+
+	hapd->setup_complete_cb = hostapd_setup_complete_cb;
 
 	/* Initialize the driver interface */
 	if (!(b[0] | b[1] | b[2] | b[3] | b[4] | b[5]))
@@ -371,8 +387,6 @@ static void hostapd_global_deinit(const char *pid_file)
 #endif /* CONFIG_NATIVE_WINDOWS */
 
 	eap_server_unregister_methods();
-
-	os_daemonize_terminate(pid_file);
 }
 
 
@@ -397,11 +411,6 @@ static int hostapd_global_run(struct hapd_interfaces *ifaces, int daemonize,
 		return -1;
 	}
 #endif /* EAP_SERVER_TNC */
-
-	if (daemonize && os_daemonize(pid_file)) {
-		perror("daemon");
-		return -1;
-	}
 
 	eloop_run();
 
@@ -502,6 +511,9 @@ static int hostapd_get_ctrl_iface_group(struct hapd_interfaces *interfaces,
 	return 0;
 }
 
+void hostapd_wpa_event(void *ctx, enum wpa_event_type event,
+                       union wpa_event_data *data);
+
 
 #ifdef CONFIG_WPS
 static int gen_uuid(const char *txt_addr)
@@ -529,8 +541,7 @@ int main(int argc, char *argv[])
 	struct hapd_interfaces interfaces;
 	int ret = 1;
 	size_t i, j;
-	int c, debug = 0, daemonize = 0;
-	char *pid_file = NULL;
+	int c, debug = 0;
 	const char *log_file = NULL;
 	const char *entropy_file = NULL;
 	char **bss_config = NULL, **tmp_bss;
@@ -553,8 +564,9 @@ int main(int argc, char *argv[])
 	interfaces.global_iface_name = NULL;
 	interfaces.global_ctrl_sock = -1;
 
+	wpa_supplicant_event = hostapd_wpa_event;
 	for (;;) {
-		c = getopt(argc, argv, "b:Bde:f:hKP:Ttu:vg:G:");
+		c = getopt(argc, argv, "b:Bde:f:hKP:Ttu:g:G:v::");
 		if (c < 0)
 			break;
 		switch (c) {
@@ -565,6 +577,8 @@ int main(int argc, char *argv[])
 			debug++;
 			if (wpa_debug_level > 0)
 				wpa_debug_level--;
+			wpa_printf(MSG_INFO, "wpa_debug_level:%d, MSG_INFO:%d,MSG_DEBUG:%d",
+					wpa_debug_level, MSG_INFO, MSG_DEBUG);
 			break;
 		case 'B':
 			daemonize++;
@@ -591,6 +605,8 @@ int main(int argc, char *argv[])
 			break;
 #endif /* CONFIG_DEBUG_LINUX_TRACING */
 		case 'v':
+			if (optarg)
+				exit(!has_feature(optarg));
 			show_version();
 			exit(1);
 			break;
@@ -717,6 +733,9 @@ int main(int argc, char *argv[])
 	}
 
 	hostapd_global_ctrl_iface_init(&interfaces);
+	
+	// added by MagicCG
+	odin_protocol_init(&interfaces);
 
 	if (hostapd_global_run(&interfaces, daemonize, pid_file)) {
 		wpa_printf(MSG_ERROR, "Failed to start eloop");
@@ -726,6 +745,10 @@ int main(int argc, char *argv[])
 	ret = 0;
 
  out:
+ 
+	// added by MagicCG
+	odin_protocol_deinit();
+	 
 	hostapd_global_ctrl_iface_deinit(&interfaces);
 	/* Deinitialize all interfaces */
 	for (i = 0; i < interfaces.count; i++) {

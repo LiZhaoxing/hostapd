@@ -498,7 +498,7 @@ static enum ssid_match_result ssid_match(struct hostapd_data *hapd,
 
 void handle_probe_req(struct hostapd_data *hapd,
 		      const struct ieee80211_mgmt *mgmt, size_t len,
-		      int ssi_signal)
+		      struct hostapd_frame_info *fi)
 {
 	u8 *resp;
 	struct ieee802_11_elems elems;
@@ -506,8 +506,14 @@ void handle_probe_req(struct hostapd_data *hapd,
 	size_t ie_len;
 	struct sta_info *sta = NULL;
 	size_t i, resp_len;
+	int ssi_signal = fi->ssi_signal;
 	int noack;
 	enum ssid_match_result res;
+	struct hostapd_ubus_request req = {
+		.type = HOSTAPD_UBUS_PROBE_REQ,
+		.mgmt_frame = mgmt,
+		.frame_info = fi,
+	};
 
 	ie = mgmt->u.probe_req.variable;
 	if (len < IEEE80211_HDRLEN + sizeof(mgmt->u.probe_req))
@@ -599,6 +605,10 @@ void handle_probe_req(struct hostapd_data *hapd,
 		return;
 	}
 
+	if (!sta && hapd->num_sta >= hapd->conf->max_num_sta)
+		wpa_printf(MSG_MSGDUMP, "Probe Request from " MACSTR " ignored,"
+			   " too many connected stations.", MAC2STR(mgmt->sa));
+
 #ifdef CONFIG_INTERWORKING
 	if (hapd->conf->interworking &&
 	    elems.interworking && elems.interworking_len >= 1) {
@@ -641,6 +651,12 @@ void handle_probe_req(struct hostapd_data *hapd,
 	}
 #endif /* CONFIG_P2P */
 
+	if (hostapd_ubus_handle_event(hapd, &req)) {
+		wpa_printf(MSG_DEBUG, "Probe request for " MACSTR " rejected by ubus handler.\n",
+		       MAC2STR(mgmt->sa));
+		return;
+	}
+
 	/* TODO: verify that supp_rates contains at least one matching rate
 	 * with AP configuration */
 
@@ -653,9 +669,19 @@ void handle_probe_req(struct hostapd_data *hapd,
 		return;
 	}
 #endif /* CONFIG_TESTING_OPTIONS */
+	// modified by MagicCG
+	// resp = hostapd_gen_probe_resp(hapd, sta, mgmt, elems.p2p != NULL,
+    //			&resp_len);
+	if ((hapd->conf->macaddr_acl == DENY_UNLESS_ACCEPTED) &&
+		(hapd->conf->num_accept_mac == 1) &&
+		(os_memcmp(hapd->conf->accept_mac->addr, mgmt->sa, ETH_ALEN) != 0)) {
+		return;
+	}
+	else {
+		resp = hostapd_gen_probe_resp(hapd, sta, mgmt, elems.p2p != NULL,
+					&resp_len);
+	}// modified by MagicCG
 
-	resp = hostapd_gen_probe_resp(hapd, sta, mgmt, elems.p2p != NULL,
-				      &resp_len);
 	if (resp == NULL)
 		return;
 
@@ -752,7 +778,15 @@ int ieee802_11_build_ap_params(struct hostapd_data *hapd,
 	head->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
 					   WLAN_FC_STYPE_BEACON);
 	head->duration = host_to_le16(0);
-	os_memset(head->da, 0xff, ETH_ALEN);
+	// modified by MagicCG
+	// os_memset(head->da, 0xff, ETH_ALEN);
+	if ((hapd->conf->macaddr_acl == DENY_UNLESS_ACCEPTED) &&
+		(hapd->conf->num_accept_mac == 1)) {
+		os_memcpy(head->da, hapd->conf->accept_mac->addr, ETH_ALEN);
+	}
+	else {
+		os_memset(head->da, 0xff, ETH_ALEN);
+	}// modified by MagicCG
 
 	os_memcpy(head->sa, hapd->own_addr, ETH_ALEN);
 	os_memcpy(head->bssid, hapd->own_addr, ETH_ALEN);
@@ -1027,5 +1061,152 @@ int ieee802_11_update_beacons(struct hostapd_iface *iface)
 
 	return ret;
 }
+
+//added by MagicCG
+static u8 * generate_beacon_frame(struct hostapd_data *hapd,
+                   struct sta_info *sta,
+                   const u8 *sta_mac,
+                   const u8 *bssid,
+                   const u8 *ssid,
+                   size_t ssid_len,
+                   int is_p2p, size_t *resp_len)
+{
+    struct ieee80211_mgmt *resp;
+    u8 *pos, *epos;
+    size_t buflen;
+
+#define MAX_PROBERESP_LEN 768
+    buflen = MAX_PROBERESP_LEN;
+#ifdef CONFIG_WPS
+    if (hapd->wps_probe_resp_ie)
+        buflen += wpabuf_len(hapd->wps_probe_resp_ie);
+#endif /* CONFIG_WPS */
+#ifdef CONFIG_P2P
+    if (hapd->p2p_probe_resp_ie)
+        buflen += wpabuf_len(hapd->p2p_probe_resp_ie);
+#endif /* CONFIG_P2P */
+    if (hapd->conf->vendor_elements)
+        buflen += wpabuf_len(hapd->conf->vendor_elements);
+    resp = os_zalloc(buflen);
+    if (resp == NULL)
+        return NULL;
+
+    epos = ((u8 *) resp) + MAX_PROBERESP_LEN;
+
+    resp->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
+                       WLAN_FC_STYPE_BEACON);
+
+    os_memcpy(resp->da, sta_mac, ETH_ALEN);
+    os_memcpy(resp->sa, bssid, ETH_ALEN);
+    os_memcpy(resp->bssid, bssid, ETH_ALEN);
+
+    resp->u.probe_resp.beacon_int =
+        host_to_le16(hapd->iconf->beacon_int);
+
+    /* hardware or low-level driver will setup seq_ctrl and timestamp */
+    resp->u.probe_resp.capab_info =
+        host_to_le16(hostapd_own_capab_info(hapd, sta, 1));
+
+    pos = resp->u.probe_resp.variable;
+    *pos++ = WLAN_EID_SSID;
+    *pos++ = ssid_len;
+    os_memcpy(pos, ssid, ssid_len);
+    pos += ssid_len;
+
+    /* Supported rates */
+    pos = hostapd_eid_supp_rates(hapd, pos);
+
+    /* DS Params */
+    pos = hostapd_eid_ds_params(hapd, pos);
+
+    pos = hostapd_eid_country(hapd, pos, epos - pos);
+
+    /* Power Constraint element */
+    pos = hostapd_eid_pwr_constraint(hapd, pos);
+
+    /* ERP Information element */
+    pos = hostapd_eid_erp_info(hapd, pos);
+
+    /* Extended supported rates */
+    pos = hostapd_eid_ext_supp_rates(hapd, pos);
+
+    /* RSN, MDIE, WPA */
+    pos = hostapd_eid_wpa(hapd, pos, epos - pos);
+
+    pos = hostapd_eid_bss_load(hapd, pos, epos - pos);
+
+#ifdef CONFIG_IEEE80211N
+    pos = hostapd_eid_ht_capabilities(hapd, pos);
+    pos = hostapd_eid_ht_operation(hapd, pos);
+#endif /* CONFIG_IEEE80211N */
+
+    pos = hostapd_eid_ext_capab(hapd, pos);
+
+    pos = hostapd_eid_time_adv(hapd, pos);
+    pos = hostapd_eid_time_zone(hapd, pos);
+
+    pos = hostapd_eid_interworking(hapd, pos);
+    pos = hostapd_eid_adv_proto(hapd, pos);
+    pos = hostapd_eid_roaming_consortium(hapd, pos);
+
+    pos = hostapd_add_csa_elems(hapd, pos, (u8 *)resp,
+                    &hapd->iface->cs_c_off_proberesp);
+#ifdef CONFIG_IEEE80211AC
+    pos = hostapd_eid_vht_capabilities(hapd, pos);
+    pos = hostapd_eid_vht_operation(hapd, pos);
+#endif /* CONFIG_IEEE80211AC */
+
+    /* Wi-Fi Alliance WMM */
+    pos = hostapd_eid_wmm(hapd, pos);
+
+#ifdef CONFIG_WPS
+    if (hapd->conf->wps_state && hapd->wps_probe_resp_ie) {
+        os_memcpy(pos, wpabuf_head(hapd->wps_probe_resp_ie),
+              wpabuf_len(hapd->wps_probe_resp_ie));
+        pos += wpabuf_len(hapd->wps_probe_resp_ie);
+    }
+#endif /* CONFIG_WPS */
+
+#ifdef CONFIG_P2P
+    if ((hapd->conf->p2p & P2P_ENABLED) && is_p2p &&
+        hapd->p2p_probe_resp_ie) {
+        os_memcpy(pos, wpabuf_head(hapd->p2p_probe_resp_ie),
+              wpabuf_len(hapd->p2p_probe_resp_ie));
+        pos += wpabuf_len(hapd->p2p_probe_resp_ie);
+    }
+#endif /* CONFIG_P2P */
+#ifdef CONFIG_P2P_MANAGER
+    if ((hapd->conf->p2p & (P2P_MANAGE | P2P_ENABLED | P2P_GROUP_OWNER)) ==
+        P2P_MANAGE)
+        pos = hostapd_eid_p2p_manage(hapd, pos);
+#endif /* CONFIG_P2P_MANAGER */
+
+#ifdef CONFIG_HS20
+    pos = hostapd_eid_hs20_indication(hapd, pos);
+    pos = hostapd_eid_osen(hapd, pos);
+#endif /* CONFIG_HS20 */
+
+    if (hapd->conf->vendor_elements) {
+        os_memcpy(pos, wpabuf_head(hapd->conf->vendor_elements),
+              wpabuf_len(hapd->conf->vendor_elements));
+        pos += wpabuf_len(hapd->conf->vendor_elements);
+    }
+
+    *resp_len = pos - (u8 *) resp;
+    return (u8 *) resp;
+}
+
+u8 * get_beacon(struct hostapd_data *hapd, const u8 *sta_mac,
+        const u8 *bssid, const u8 *ssid, size_t ssid_len, size_t *beacon_len) {
+    u8 *beacon = NULL;
+    struct sta_info *sta = NULL;
+    sta = ap_get_sta(hapd, sta_mac);
+
+    beacon = generate_beacon_frame(hapd, sta, sta_mac, bssid, ssid, ssid_len, 0, beacon_len);
+
+    return beacon;
+}
+//--------------------
+
 
 #endif /* CONFIG_NATIVE_WINDOWS */

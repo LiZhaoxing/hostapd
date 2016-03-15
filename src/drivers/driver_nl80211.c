@@ -39,6 +39,8 @@
 #include "radiotap_iter.h"
 #include "rfkill.h"
 #include "driver.h"
+// added by MagicCG
+#include "odin/odinagent.h"
 
 #ifndef SO_WIFI_STATUS
 # if defined(__sparc__)
@@ -4817,18 +4819,20 @@ wpa_driver_nl80211_finish_drv_init(struct wpa_driver_nl80211_data *drv,
 }
 
 
-static int wpa_driver_nl80211_del_beacon(struct wpa_driver_nl80211_data *drv)
+static int wpa_driver_nl80211_del_bss_beacon(struct i802_bss *bss)
 {
+	struct wpa_driver_nl80211_data *drv = bss->drv;
 	struct nl_msg *msg;
 
 	msg = nlmsg_alloc();
 	if (!msg)
 		return -ENOMEM;
 
+	bss->beacon_set = 0;
 	wpa_printf(MSG_DEBUG, "nl80211: Remove beacon (ifindex=%d)",
-		   drv->ifindex);
+		   bss->ifindex);
 	nl80211_cmd(drv, msg, 0, NL80211_CMD_DEL_BEACON);
-	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, drv->ifindex);
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, bss->ifindex);
 
 	return send_and_recv_msgs(drv, msg, NULL, NULL);
  nla_put_failure:
@@ -4836,6 +4840,15 @@ static int wpa_driver_nl80211_del_beacon(struct wpa_driver_nl80211_data *drv)
 	return -ENOBUFS;
 }
 
+static int wpa_driver_nl80211_del_beacon(struct wpa_driver_nl80211_data *drv)
+{
+	struct i802_bss *bss;
+
+	for (bss = drv->first_bss; bss; bss = bss->next)
+		wpa_driver_nl80211_del_bss_beacon(bss);
+
+	return 0;
+}
 
 /**
  * wpa_driver_nl80211_deinit - Deinitialize nl80211 driver interface
@@ -7488,7 +7501,7 @@ static int nl80211_set_channel(struct i802_bss *bss,
 	nl80211_cmd(drv, msg, 0, set_chan ? NL80211_CMD_SET_CHANNEL :
 		    NL80211_CMD_SET_WIPHY);
 
-	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, drv->ifindex);
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, bss->ifindex);
 	if (nl80211_put_freq_params(msg, freq) < 0)
 		goto nla_put_failure;
 
@@ -8297,7 +8310,9 @@ static int nl80211_setup_ap(struct i802_bss *bss)
 
 	wpa_printf(MSG_DEBUG, "nl80211: Setup AP(%s) - device_ap_sme=%d use_monitor=%d",
 		   bss->ifname, drv->device_ap_sme, drv->use_monitor);
-
+	//added by MagicCG
+	wpa_printf(MSG_INFO, "add_bss: Setup AP(%s) - device_ap_sme=%d use_monitor=%d",
+			bss->ifname, drv->device_ap_sme, drv->use_monitor);
 	/*
 	 * Disable Probe Request reporting unless we need it in this way for
 	 * devices that include the AP SME, in the other case (unless using
@@ -8570,7 +8585,7 @@ static int wpa_driver_nl80211_ibss(struct wpa_driver_nl80211_data *drv,
 				   struct wpa_driver_associate_params *params)
 {
 	struct nl_msg *msg;
-	int ret = -1;
+	int ret = -1, i;
 	int count = 0;
 
 	wpa_printf(MSG_DEBUG, "nl80211: Join IBSS (ifindex=%d)", drv->ifindex);
@@ -8607,6 +8622,53 @@ retry:
 		wpa_printf(MSG_DEBUG, "  * beacon_int=%d", params->beacon_int);
 		NLA_PUT_U32(msg, NL80211_ATTR_BEACON_INTERVAL,
 			    params->beacon_int);
+	}
+
+	if (params->fixed_freq) {
+		wpa_printf(MSG_DEBUG, "  * fixed_freq");
+		NLA_PUT_FLAG(msg, NL80211_ATTR_FREQ_FIXED);
+	}
+
+	if (params->beacon_interval > 0) {
+		wpa_printf(MSG_DEBUG, "  * beacon_interval=%d",
+			   params->beacon_interval);
+		NLA_PUT_U32(msg, NL80211_ATTR_BEACON_INTERVAL,
+			    params->beacon_interval);
+	}
+
+	if (params->rates[0] > 0) {
+		wpa_printf(MSG_DEBUG, "  * basic_rates:");
+		i = 0;
+		while (i < NL80211_MAX_SUPP_RATES &&
+		       params->rates[i] > 0) {
+			wpa_printf(MSG_DEBUG, "    %.1f",
+				   (double)params->rates[i] / 2);
+			i++;
+		}
+		NLA_PUT(msg, NL80211_ATTR_BSS_BASIC_RATES, i,
+			params->rates);
+	}
+
+	if (params->mcast_rate > 0) {
+		wpa_printf(MSG_DEBUG, "  * mcast_rates=%.1f",
+			   (double)params->mcast_rate / 10);
+		NLA_PUT_U32(msg, NL80211_ATTR_MCAST_RATE, params->mcast_rate);
+	}
+
+	if (params->ht_set) {
+		switch(params->htmode) {
+			case NL80211_CHAN_HT20:
+				wpa_printf(MSG_DEBUG, "  * ht=HT20");
+				break;
+			case NL80211_CHAN_HT40PLUS:
+				wpa_printf(MSG_DEBUG, "  * ht=HT40+");
+				break;
+			case NL80211_CHAN_HT40MINUS:
+				wpa_printf(MSG_DEBUG, "  * ht=HT40-");
+				break;
+		}
+		NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE,
+			    params->htmode);
 	}
 
 	ret = nl80211_set_conn_keys(params, msg);
@@ -9059,12 +9121,7 @@ static int wpa_driver_nl80211_set_mode(struct i802_bss *bss,
 			/* Try to set the mode again while the interface is
 			 * down */
 			ret = nl80211_set_mode(drv, drv->ifindex, nlmode);
-			if (ret == -EACCES)
-				break;
-			res = i802_set_iface_flags(bss, 1);
-			if (res && !ret)
-				ret = -1;
-			else if (ret != -EBUSY)
+			if (ret != -EBUSY)
 				break;
 		} else
 			wpa_printf(MSG_DEBUG, "nl80211: Failed to set "
@@ -9077,6 +9134,8 @@ static int wpa_driver_nl80211_set_mode(struct i802_bss *bss,
 			   "interface is down");
 		drv->nlmode = nlmode;
 		drv->ignore_if_down_event = 1;
+		if (i802_set_iface_flags(bss, 1))
+			ret = -1;
 	}
 
 done:
@@ -10617,7 +10676,6 @@ static int wpa_driver_nl80211_stop_ap(void *priv)
 	if (!is_ap_interface(drv->nlmode))
 		return -1;
 	wpa_driver_nl80211_del_beacon(drv);
-	bss->beacon_set = 0;
 	return 0;
 }
 
@@ -11722,6 +11780,15 @@ static int driver_nl80211_send_mlme(void *priv, const u8 *data,
 }
 
 
+//added by MagicCG
+static int driver_nl80211_send_mntr(void *priv, const u8 *data,
+				    size_t data_len)
+{
+	struct i802_bss *bss = priv;
+	return wpa_driver_nl80211_send_mntr(bss->drv, data, data_len, 1, 0);
+}
+
+
 static int driver_nl80211_sta_remove(void *priv, const u8 *addr)
 {
 	struct i802_bss *bss = priv;
@@ -12047,7 +12114,7 @@ static int nl80211_switch_channel(void *priv, struct csa_settings *settings)
 		return -ENOMEM;
 
 	nl80211_cmd(drv, msg, 0, NL80211_CMD_CHANNEL_SWITCH);
-	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, drv->ifindex);
+	NLA_PUT_U32(msg, NL80211_ATTR_IFINDEX, bss->ifindex);
 	NLA_PUT_U32(msg, NL80211_ATTR_CH_SWITCH_COUNT, settings->cs_count);
 	ret = nl80211_put_freq_params(msg, &settings->freq_params);
 	if (ret)
@@ -12091,6 +12158,248 @@ error:
 	nlmsg_free(msg);
 	wpa_printf(MSG_DEBUG, "nl80211: Could not build channel switch request");
 	return ret;
+}
+
+
+//added by MagicCG
+static void nl80211_remove_odin_monitor_interface(void *priv)
+{
+	struct i802_bss *bss = priv;
+	struct wpa_driver_nl80211_data *drv = bss->drv;
+	nl80211_remove_monitor_interface(drv);
+}
+
+
+//added by MagicCG
+static int nl80211_create_iface_once_odin(struct wpa_driver_nl80211_data *drv,
+				     const char *ifname,
+				     enum nl80211_iftype iftype,
+				     const u8 *addr, int wds,
+				     int (*handler)(struct nl_msg *, void *),
+				     void *arg)
+{
+	struct nl_msg *msg;
+	int ifidx;
+	int ret = -ENOBUFS;
+
+	wpa_printf(MSG_DEBUG, "nl80211: Create interface iftype %d (%s)",
+		   iftype, nl80211_iftype_str(iftype));
+
+	msg = nlmsg_alloc();
+	if (!msg)
+		return -1;
+
+	nl80211_cmd(drv, msg, 0, NL80211_CMD_NEW_INTERFACE);
+	if (nl80211_set_iface_id(msg, drv->first_bss) < 0)
+		goto nla_put_failure;
+	NLA_PUT_STRING(msg, NL80211_ATTR_IFNAME, ifname);
+	NLA_PUT_U32(msg, NL80211_ATTR_IFTYPE, iftype);
+
+	if (iftype == NL80211_IFTYPE_MONITOR) {
+		struct nlattr *flags;
+
+		flags = nla_nest_start(msg, NL80211_ATTR_MNTR_FLAGS);
+		if (!flags)
+			goto nla_put_failure;
+
+		NLA_PUT_FLAG(msg, NL80211_MNTR_FLAG_CONTROL);
+		NLA_PUT_FLAG(msg, NL80211_MNTR_FLAG_OTHER_BSS);
+
+		nla_nest_end(msg, flags);
+	} else if (wds) {
+		NLA_PUT_U8(msg, NL80211_ATTR_4ADDR, wds);
+	}
+
+	/*
+	 * Tell cfg80211 that the interface belongs to the socket that created
+	 * it, and the interface should be deleted when the socket is closed.
+	 */
+	NLA_PUT_FLAG(msg, NL80211_ATTR_IFACE_SOCKET_OWNER);
+
+	ret = send_and_recv_msgs(drv, msg, handler, arg);
+	msg = NULL;
+	if (ret) {
+ nla_put_failure:
+		nlmsg_free(msg);
+		wpa_printf(MSG_ERROR, "Failed to create interface %s: %d (%s)",
+			   ifname, ret, strerror(-ret));
+		return ret;
+	}
+
+	if (iftype == NL80211_IFTYPE_P2P_DEVICE)
+		return 0;
+
+	ifidx = if_nametoindex(ifname);
+	wpa_printf(MSG_DEBUG, "nl80211: New interface %s created: ifindex=%d",
+		   ifname, ifidx);
+
+	if (ifidx <= 0)
+		return -1;
+
+	/*
+	 * Some virtual interfaces need to process EAPOL packets and events on
+	 * the parent interface. This is used mainly with hostapd.
+	 */
+	if (drv->hostapd ||
+	    iftype == NL80211_IFTYPE_AP_VLAN ||
+	    iftype == NL80211_IFTYPE_WDS ||
+	    iftype == NL80211_IFTYPE_MONITOR) {
+		/* start listening for EAPOL on this interface */
+		add_ifidx(drv, ifidx);
+	}
+
+	if (addr && iftype != NL80211_IFTYPE_MONITOR &&
+	    linux_set_ifhwaddr(drv->global->ioctl_sock, ifname, addr)) {
+		nl80211_remove_iface(drv, ifidx);
+		return -1;
+	}
+
+	return ifidx;
+}
+
+
+//added by MagicCG
+static int nl80211_create_iface_odin(struct wpa_driver_nl80211_data *drv,
+				const char *ifname, enum nl80211_iftype iftype,
+				const u8 *addr, int wds,
+				int (*handler)(struct nl_msg *, void *),
+				void *arg, int use_existing)
+{
+	int ret;
+
+	ret = nl80211_create_iface_once_odin(drv, ifname, iftype, addr, wds, handler,
+					arg);
+
+	/* if error occurred and interface exists already */
+	if (ret == -ENFILE && if_nametoindex(ifname)) {
+		if (use_existing) {
+			wpa_printf(MSG_DEBUG, "nl80211: Continue using existing interface %s",
+				   ifname);
+			if (addr && iftype != NL80211_IFTYPE_MONITOR &&
+			    linux_set_ifhwaddr(drv->global->ioctl_sock, ifname,
+					       addr) < 0 &&
+			    (linux_set_iface_flags(drv->global->ioctl_sock,
+						   ifname, 0) < 0 ||
+			     linux_set_ifhwaddr(drv->global->ioctl_sock, ifname,
+						addr) < 0 ||
+			     linux_set_iface_flags(drv->global->ioctl_sock,
+						   ifname, 1) < 0))
+					return -1;
+			return -ENFILE;
+		}
+		wpa_printf(MSG_INFO, "Try to remove and re-create %s", ifname);
+
+		/* Try to remove the interface that was already there. */
+		nl80211_remove_iface(drv, if_nametoindex(ifname));
+
+		/* Try to create the interface again */
+		ret = nl80211_create_iface_once_odin(drv, ifname, iftype, addr,
+						wds, handler, arg);
+	}
+
+	if (ret >= 0 && is_p2p_net_interface(iftype))
+		nl80211_disable_11b_rates(drv, ret, 1);
+
+	return ret;
+}
+
+
+//added by MagicCG
+static int nl80211_create_odin_monitor_interface(void *priv)
+{
+	char buf[IFNAMSIZ];
+	struct i802_bss *bss = priv;
+	struct wpa_driver_nl80211_data *drv = bss->drv;
+	struct sockaddr_ll ll;
+	int optval;
+	socklen_t optlen;
+
+	if (drv->monitor_ifidx >= 0) {
+		drv->monitor_refcount++;
+		wpa_printf(MSG_DEBUG, "nl80211: Re-use existing monitor interface: refcount=%d",
+			   drv->monitor_refcount);
+		return 0;
+	}
+
+	if (os_strncmp(drv->first_bss->ifname, "p2p-", 4) == 0) {
+		/*
+		 * P2P interface name is of the format p2p-%s-%d. For monitor
+		 * interface name corresponding to P2P GO, replace "p2p-" with
+		 * "mon-" to retain the same interface name length and to
+		 * indicate that it is a monitor interface.
+		 */
+		snprintf(buf, IFNAMSIZ, "mon-%s-odin", drv->first_bss->ifname + 4);
+	} else {
+		/* Non-P2P interface with AP functionality. */
+		snprintf(buf, IFNAMSIZ, "mon.%s.odin", drv->first_bss->ifname);
+	}
+
+	buf[IFNAMSIZ - 1] = '\0';
+
+	drv->monitor_ifidx =
+		nl80211_create_iface_odin(drv, buf, NL80211_IFTYPE_MONITOR, NULL,
+				     0, NULL, NULL, 0);
+
+	if (drv->monitor_ifidx == -EOPNOTSUPP) {
+		/*
+		 * This is backward compatibility for a few versions of
+		 * the kernel only that didn't advertise the right
+		 * attributes for the only driver that then supported
+		 * AP mode w/o monitor -- ath6kl.
+		 */
+		wpa_printf(MSG_DEBUG, "nl80211: Driver does not support "
+			   "monitor interface type - try to run without it");
+		drv->device_ap_sme = 1;
+	}
+
+	if (drv->monitor_ifidx < 0)
+		return -1;
+
+	if (linux_set_iface_flags(drv->global->ioctl_sock, buf, 1))
+		goto error;
+
+	memset(&ll, 0, sizeof(ll));
+	ll.sll_family = AF_PACKET;
+	ll.sll_ifindex = drv->monitor_ifidx;
+	drv->monitor_sock = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+	if (drv->monitor_sock < 0) {
+		wpa_printf(MSG_ERROR, "nl80211: socket[PF_PACKET,SOCK_RAW] failed: %s",
+			   strerror(errno));
+		goto error;
+	}
+
+//	if (add_monitor_filter(drv->monitor_sock)) {
+//		wpa_printf(MSG_INFO, "Failed to set socket filter for monitor "
+//			   "interface; do filtering in user space");
+		/* This works, but will cost in performance. */
+//	}
+
+	if (bind(drv->monitor_sock, (struct sockaddr *) &ll, sizeof(ll)) < 0) {
+		wpa_printf(MSG_ERROR, "nl80211: monitor socket bind failed: %s",
+			   strerror(errno));
+		goto error;
+	}
+
+	optlen = sizeof(optval);
+	optval = 20;
+	if (setsockopt
+	    (drv->monitor_sock, SOL_SOCKET, SO_PRIORITY, &optval, optlen)) {
+		wpa_printf(MSG_ERROR, "nl80211: Failed to set socket priority: %s",
+			   strerror(errno));
+		goto error;
+	}
+
+	if (eloop_register_read_sock(drv->monitor_sock, odin_handle_monitor_read,
+				     drv, NULL)) {
+		wpa_printf(MSG_INFO, "nl80211: Could not register monitor read socket");
+		goto error;
+	}
+
+	drv->monitor_refcount++;
+	return 0;
+ error:
+	nl80211_remove_monitor_interface(drv);
+	return -1;
 }
 
 
@@ -12356,6 +12665,10 @@ const struct wpa_driver_ops wpa_driver_nl80211_ops = {
 	.get_survey = wpa_driver_nl80211_get_survey,
 	.status = wpa_driver_nl80211_status,
 	.switch_channel = nl80211_switch_channel,
+	//added by MagicCG
+	.create_odin_monitor_interface = nl80211_create_odin_monitor_interface,
+	.remove_odin_monitor_interface = nl80211_remove_odin_monitor_interface,
+	.send_mntr = driver_nl80211_send_mntr,
 #ifdef ANDROID_P2P
 	.set_noa = wpa_driver_set_p2p_noa,
 	.get_noa = wpa_driver_get_p2p_noa,

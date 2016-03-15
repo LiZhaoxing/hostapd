@@ -14,12 +14,17 @@ struct ieee80211_mgmt;
 
 void handle_probe_req(struct hostapd_data *hapd,
 		      const struct ieee80211_mgmt *mgmt, size_t len,
-		      int ssi_signal);
+		      struct hostapd_frame_info *fi);
 int ieee802_11_set_beacon(struct hostapd_data *hapd);
 int ieee802_11_set_beacons(struct hostapd_iface *iface);
 int ieee802_11_update_beacons(struct hostapd_iface *iface);
 int ieee802_11_build_ap_params(struct hostapd_data *hapd,
 			       struct wpa_driver_ap_params *params);
 void ieee802_11_free_ap_params(struct wpa_driver_ap_params *params);
+
+//added by MagicCG
+u8 * get_beacon(struct hostapd_data *hapd, const u8 *sta_mac,
+        const u8 *bssid, const u8 *ssid, size_t ssid_len, size_t *beacon_len);
+//-----------------
 
 #endif /* BEACON_H */

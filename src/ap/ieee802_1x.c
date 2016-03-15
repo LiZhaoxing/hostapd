@@ -2119,11 +2119,12 @@ void ieee802_1x_notify_pre_auth(struct eapol_state_machine *sm, int pre_auth)
 }
 
 
-static const char * bool_txt(Boolean bool)
+static const char * bool_txt(Boolean bool_val)
 {
-	return bool ? "TRUE" : "FALSE";
+	return bool_val ? "TRUE" : "FALSE";
 }
 
+#ifdef CONFIG_CTRL_IFACE_MIB
 
 int ieee802_1x_get_mib(struct hostapd_data *hapd, char *buf, size_t buflen)
 {
@@ -2291,6 +2292,7 @@ int ieee802_1x_get_mib_sta(struct hostapd_data *hapd, struct sta_info *sta,
 	return len;
 }
 
+#endif
 
 static void ieee802_1x_finished(struct hostapd_data *hapd,
 				struct sta_info *sta, int success,

@@ -540,7 +540,8 @@ failed:
 
 
 static void handle_auth(struct hostapd_data *hapd,
-			const struct ieee80211_mgmt *mgmt, size_t len)
+			const struct ieee80211_mgmt *mgmt, size_t len,
+			struct hostapd_frame_info *fi)
 {
 	u16 auth_alg, auth_transaction, status_code;
 	u16 resp = WLAN_STATUS_SUCCESS;
@@ -555,6 +556,11 @@ static void handle_auth(struct hostapd_data *hapd,
 	size_t resp_ies_len = 0;
 	char *identity = NULL;
 	char *radius_cui = NULL;
+	struct hostapd_ubus_request req = {
+		.type = HOSTAPD_UBUS_AUTH_REQ,
+		.mgmt_frame = mgmt,
+		.frame_info = fi,
+	};
 
 	if (len < IEEE80211_HDRLEN + sizeof(mgmt->u.auth)) {
 		wpa_printf(MSG_INFO, "handle_auth - too short payload (len=%lu)",
@@ -638,6 +644,14 @@ static void handle_auth(struct hostapd_data *hapd,
 		resp = WLAN_STATUS_UNSPECIFIED_FAILURE;
 		goto fail;
 	}
+
+	if (hostapd_ubus_handle_event(hapd, &req)) {
+		wpa_printf(MSG_DEBUG, "Station " MACSTR " rejected by ubus handler.\n",
+		       MAC2STR(mgmt->sa));
+		resp = WLAN_STATUS_UNSPECIFIED_FAILURE;
+		goto fail;
+	}
+
 	if (res == HOSTAPD_ACL_PENDING) {
 		wpa_printf(MSG_DEBUG, "Authentication frame from " MACSTR
 			   " waiting for an external authentication",
@@ -1272,13 +1286,18 @@ static void send_assoc_resp(struct hostapd_data *hapd, struct sta_info *sta,
 
 static void handle_assoc(struct hostapd_data *hapd,
 			 const struct ieee80211_mgmt *mgmt, size_t len,
-			 int reassoc)
+			 int reassoc, struct hostapd_frame_info *fi)
 {
 	u16 capab_info, listen_interval;
 	u16 resp = WLAN_STATUS_SUCCESS;
 	const u8 *pos;
 	int left, i;
 	struct sta_info *sta;
+	struct hostapd_ubus_request req = {
+		.type = HOSTAPD_UBUS_ASSOC_REQ,
+		.mgmt_frame = mgmt,
+		.frame_info = fi,
+	};
 
 	if (len < IEEE80211_HDRLEN + (reassoc ? sizeof(mgmt->u.reassoc_req) :
 				      sizeof(mgmt->u.assoc_req))) {
@@ -1374,6 +1393,13 @@ static void handle_assoc(struct hostapd_data *hapd,
 		hostapd_logger(hapd, mgmt->sa, HOSTAPD_MODULE_IEEE80211,
 			       HOSTAPD_LEVEL_INFO, "No room for more AIDs");
 		resp = WLAN_STATUS_AP_UNABLE_TO_HANDLE_NEW_STA;
+		goto fail;
+	}
+
+	if (hostapd_ubus_handle_event(hapd, &req)) {
+		wpa_printf(MSG_DEBUG, "Station " MACSTR " assoc rejected by ubus handler.\n",
+		       MAC2STR(mgmt->sa));
+		resp = WLAN_STATUS_UNSPECIFIED_FAILURE;
 		goto fail;
 	}
 
@@ -1765,7 +1791,7 @@ int ieee802_11_mgmt(struct hostapd_data *hapd, const u8 *buf, size_t len,
 
 
 	if (stype == WLAN_FC_STYPE_PROBE_REQ) {
-		handle_probe_req(hapd, mgmt, len, fi->ssi_signal);
+		handle_probe_req(hapd, mgmt, len, fi);
 		return 1;
 	}
 
@@ -1780,17 +1806,17 @@ int ieee802_11_mgmt(struct hostapd_data *hapd, const u8 *buf, size_t len,
 	switch (stype) {
 	case WLAN_FC_STYPE_AUTH:
 		wpa_printf(MSG_DEBUG, "mgmt::auth");
-		handle_auth(hapd, mgmt, len);
+		handle_auth(hapd, mgmt, len, fi);
 		ret = 1;
 		break;
 	case WLAN_FC_STYPE_ASSOC_REQ:
 		wpa_printf(MSG_DEBUG, "mgmt::assoc_req");
-		handle_assoc(hapd, mgmt, len, 0);
+		handle_assoc(hapd, mgmt, len, 0, fi);
 		ret = 1;
 		break;
 	case WLAN_FC_STYPE_REASSOC_REQ:
 		wpa_printf(MSG_DEBUG, "mgmt::reassoc_req");
-		handle_assoc(hapd, mgmt, len, 1);
+		handle_assoc(hapd, mgmt, len, 1, fi);
 		ret = 1;
 		break;
 	case WLAN_FC_STYPE_DISASSOC:

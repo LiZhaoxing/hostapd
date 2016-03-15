@@ -19,6 +19,7 @@
 
 #define WPA_SUPPLICANT_DRIVER_VERSION 4
 
+#include "drivers/nl80211_copy.h"
 #include "common/defs.h"
 #include "utils/list.h"
 
@@ -413,6 +414,13 @@ struct wpa_driver_associate_params {
 	 * This can be %NULL, if ap_scan=2 mode is used and the driver is
 	 * responsible for selecting with which BSS to associate. */
 	const u8 *bssid;
+
+	int beacon_interval;
+	int fixed_freq;
+	unsigned char rates[NL80211_MAX_SUPP_RATES];
+	int mcast_rate;
+	int ht_set;
+	unsigned int htmode;
 
 	/**
 	 * bssid_hint - BSSID of a proposed AP
@@ -1674,6 +1682,15 @@ struct wpa_driver_ops {
 	 */
 	int (*send_mlme)(void *priv, const u8 *data, size_t data_len,
 			 int noack);
+			 
+	/**
+	 * send_mntr - Send management frame using monitor interface
+	 * @priv: Private driver interface data
+	 * @data: IEEE 802.11 management frame with IEEE 802.11 header
+	 * @data_len: Size of the management frame
+	 * Returns: 0 on success, -1 on failure
+	 */
+	int (*send_mntr)(void *priv, const u8 *data, size_t data_len);
 
 	/**
 	 * update_ft_ies - Update FT (IEEE 802.11r) IEs
@@ -2795,6 +2812,21 @@ struct wpa_driver_ops {
 	 * Returns: Length of written status information or -1 on failure
 	 */
 	int (*status)(void *priv, char *buf, size_t buflen);
+	
+	/**
+	 * added by MagicCG
+	 * create_odin_monitor_interface - Create the monitor interface for odin protocol
+	 * @priv: Private driver interface data
+	 * Returns: 0 on success, -1 on failure
+	 */
+	int (*create_odin_monitor_interface)(void *priv);
+
+	/**
+	 * added by MagicCG
+	 * remove_odin_monitor_interface - Delete the monitor interface for odin protocol
+	 * @priv: Private driver interface data
+	 */
+	void (*remove_odin_monitor_interface)(void *priv);
 
 #ifdef CONFIG_MACSEC
 	int (*macsec_init)(void *priv, struct macsec_init_params *params);
@@ -4117,8 +4149,8 @@ union wpa_event_data {
  * Driver wrapper code should call this function whenever an event is received
  * from the driver.
  */
-void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
-			  union wpa_event_data *data);
+extern void (*wpa_supplicant_event)(void *ctx, enum wpa_event_type event,
+				    union wpa_event_data *data);
 
 
 /*

@@ -12,6 +12,7 @@
 #include "common/defs.h"
 #include "ap_config.h"
 #include "drivers/driver.h"
+#include "ubus.h"
 
 struct wpa_ctrl_dst;
 struct radius_server_data;
@@ -99,6 +100,7 @@ struct hostapd_data {
 	struct hostapd_iface *iface;
 	struct hostapd_config *iconf;
 	struct hostapd_bss_config *conf;
+	struct hostapd_ubus_bss ubus;
 	int interface_added; /* virtual interface added for this BSS */
 	unsigned int started:1;
 
@@ -253,6 +255,8 @@ struct hostapd_iface {
 	char *config_fname;
 	struct hostapd_config *conf;
 	char phy[16]; /* Name of the PHY (radio) */
+
+	struct hostapd_ubus_iface ubus;
 
 	enum hostapd_iface_state {
 		HAPD_IFACE_UNINITIALIZED,

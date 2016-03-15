@@ -105,6 +105,55 @@ const char *wpa_supplicant_full_license5 =
 "\n";
 #endif /* CONFIG_NO_STDOUT_DEBUG */
 
+static int hostapd_stop(struct wpa_supplicant *wpa_s)
+{
+	const char *cmd = "DOWN";
+	char buf[256];
+	int len = sizeof(buf);
+
+	if (wpa_ctrl_request(wpa_s->hostapd, cmd, os_strlen(cmd), buf, &len, NULL) < 0) {
+		wpa_printf(MSG_ERROR, "\nFailed to stop hostapd AP interfaces\n");
+		return -1;
+	}
+	return 0;
+}
+
+static int hostapd_reload(struct wpa_supplicant *wpa_s, struct wpa_bss *bss)
+{
+	char *cmd = NULL;
+	char buf[256];
+	int len = sizeof(buf);
+	enum hostapd_hw_mode hw_mode;
+	u8 channel;
+	int sec_chan = 0;
+	int ret;
+
+	if (!bss)
+		return;
+
+	if (bss->ht_param & HT_INFO_HT_PARAM_STA_CHNL_WIDTH) {
+		int sec = bss->ht_param & HT_INFO_HT_PARAM_SECONDARY_CHNL_OFF_MASK;
+		if (sec == HT_INFO_HT_PARAM_SECONDARY_CHNL_ABOVE)
+			sec_chan = 1;
+		else if (sec ==  HT_INFO_HT_PARAM_SECONDARY_CHNL_BELOW)
+			sec_chan = -1;
+	}
+
+	hw_mode = ieee80211_freq_to_chan(bss->freq, &channel);
+	if (asprintf(&cmd, "UPDATE channel=%d sec_chan=%d hw_mode=%d ieee80211n=%d",
+		     channel, sec_chan, hw_mode, !!bss->ht_capab) < 0)
+		return -1;
+
+	ret = wpa_ctrl_request(wpa_s->hostapd, cmd, os_strlen(cmd), buf, &len, NULL);
+	free(cmd);
+
+	if (ret < 0) {
+		wpa_printf(MSG_ERROR, "\nFailed to reload hostapd AP interfaces\n");
+		return -1;
+	}
+	return 0;
+}
+
 /* Configure default/group WEP keys for static WEP */
 int wpa_set_wep_keys(struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid)
 {
@@ -247,9 +296,10 @@ void wpa_supplicant_cancel_auth_timeout(struct wpa_supplicant *wpa_s)
  */
 void wpa_supplicant_initiate_eapol(struct wpa_supplicant *wpa_s)
 {
+	struct wpa_ssid *ssid = wpa_s->current_ssid;
+
 #ifdef IEEE8021X_EAPOL
 	struct eapol_config eapol_conf;
-	struct wpa_ssid *ssid = wpa_s->current_ssid;
 
 #ifdef CONFIG_IBSS_RSN
 	if (ssid->mode == WPAS_MODE_IBSS &&
@@ -710,8 +760,12 @@ void wpa_supplicant_set_state(struct wpa_supplicant *wpa_s,
 #endif /* CONFIG_P2P */
 
 		sme_sched_obss_scan(wpa_s, 1);
+		if (wpa_s->hostapd)
+			hostapd_reload(wpa_s, wpa_s->current_bss);
 	} else if (state == WPA_DISCONNECTED || state == WPA_ASSOCIATING ||
 		   state == WPA_ASSOCIATED) {
+		if (wpa_s->hostapd)
+			hostapd_stop(wpa_s);
 		wpa_s->new_connection = 1;
 		wpa_drv_set_operstate(wpa_s, 0);
 #ifndef IEEE8021X_EAPOL
@@ -1752,6 +1806,15 @@ static void wpas_start_assoc_cb(struct wpa_radio_work *work, int deinit)
 			params.beacon_int = ssid->beacon_int;
 		else
 			params.beacon_int = wpa_s->conf->beacon_int;
+		params.fixed_freq = ssid->fixed_freq;
+		i = 0;
+		while (i < NL80211_MAX_SUPP_RATES) {
+			params.rates[i] = ssid->rates[i];
+			i++;
+		}
+		params.mcast_rate = ssid->mcast_rate;
+		params.ht_set = ssid->ht_set;
+		params.htmode = ssid->htmode;
 	}
 
 	params.wpa_ie = wpa_ie;
@@ -2751,7 +2814,7 @@ static struct wpa_supplicant * wpa_supplicant_alloc(void)
 	if (wpa_s == NULL)
 		return NULL;
 	wpa_s->scan_req = INITIAL_SCAN_REQ;
-	wpa_s->scan_interval = 5;
+	wpa_s->scan_interval = 1;
 	wpa_s->new_connection = 1;
 	wpa_s->parent = wpa_s;
 	wpa_s->sched_scanning = 0;
@@ -3594,6 +3657,20 @@ static int wpa_supplicant_init_iface(struct wpa_supplicant *wpa_s,
 			   sizeof(wpa_s->bridge_ifname));
 	}
 
+	if (iface->hostapd_ctrl) {
+		char *cmd = "DOWN";
+		char buf[256];
+		int len = sizeof(buf);
+
+		wpa_s->hostapd = wpa_ctrl_open(iface->hostapd_ctrl);
+		if (!wpa_s->hostapd) {
+			wpa_printf(MSG_ERROR, "\nFailed to connect to hostapd\n");
+			return -1;
+		}
+		if (hostapd_stop(wpa_s) < 0)
+			return -1;
+	}
+
 	/* RSNA Supplicant Key Management - INITIALIZE */
 	eapol_sm_notify_portEnabled(wpa_s->eapol, FALSE);
 	eapol_sm_notify_portValid(wpa_s->eapol, FALSE);
@@ -3797,6 +3874,11 @@ static void wpa_supplicant_deinit_iface(struct wpa_supplicant *wpa_s,
 	if (terminate)
 		wpa_msg(wpa_s, MSG_INFO, WPA_EVENT_TERMINATING);
 
+	if (wpa_s->hostapd) {
+		wpa_ctrl_close(wpa_s->hostapd);
+		wpa_s->hostapd = NULL;
+	}
+
 	if (wpa_s->ctrl_iface) {
 		wpa_supplicant_ctrl_iface_deinit(wpa_s->ctrl_iface);
 		wpa_s->ctrl_iface = NULL;
@@ -3809,6 +3891,9 @@ static void wpa_supplicant_deinit_iface(struct wpa_supplicant *wpa_s,
 
 	os_free(wpa_s);
 }
+
+extern void supplicant_event(void *ctx, enum wpa_event_type event,
+			     union wpa_event_data *data);
 
 
 /**
@@ -4001,6 +4086,7 @@ struct wpa_global * wpa_supplicant_init(struct wpa_params *params)
 	wpa_msg_register_ifname_cb(wpa_supplicant_msg_ifname_cb);
 #endif /* CONFIG_NO_WPA_MSG */
 
+	wpa_supplicant_event = supplicant_event;
 	wpa_debug_open_file(params->wpa_debug_file_path);
 	if (params->wpa_debug_syslog)
 		wpa_debug_open_syslog();

@@ -815,8 +815,8 @@ static void wpa_priv_send_ft_response(struct wpa_priv_interface *iface,
 }
 
 
-void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
-			  union wpa_event_data *data)
+static void supplicant_event(void *ctx, enum wpa_event_type event,
+			     union wpa_event_data *data)
 {
 	struct wpa_priv_interface *iface = ctx;
 
@@ -956,6 +956,7 @@ int main(int argc, char *argv[])
 	if (os_program_init())
 		return -1;
 
+	wpa_supplicant_event = supplicant_event;
 	wpa_priv_fd_workaround();
 
 	for (;;) {

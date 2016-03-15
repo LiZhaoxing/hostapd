@@ -12,6 +12,7 @@
 #include "common/defs.h"
 #include "utils/list.h"
 #include "eap_peer/eap_config.h"
+#include "drivers/nl80211_copy.h"
 
 #define MAX_SSID_LEN 32
 
@@ -636,6 +637,12 @@ struct wpa_ssid {
 	 * dereferences since it may not be updated in all cases.
 	 */
 	void *parent_cred;
+
+	int fixed_freq;
+	unsigned char rates[NL80211_MAX_SUPP_RATES];
+	double mcast_rate;
+	int ht_set;
+	unsigned int htmode;
 
 #ifdef CONFIG_MACSEC
 	/**

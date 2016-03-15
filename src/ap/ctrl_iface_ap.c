@@ -21,6 +21,7 @@
 #include "ctrl_iface_ap.h"
 #include "ap_drv_ops.h"
 
+#ifdef CONFIG_CTRL_IFACE_MIB
 
 static int hostapd_get_sta_tx_rx(struct hostapd_data *hapd,
 				 struct sta_info *sta,
@@ -214,6 +215,7 @@ int hostapd_ctrl_iface_sta_next(struct hostapd_data *hapd, const char *txtaddr,
 	return hostapd_ctrl_iface_sta_mib(hapd, sta->next, buf, buflen);
 }
 
+#endif
 
 #ifdef CONFIG_P2P_MANAGER
 static int p2p_manager_disconnect(struct hostapd_data *hapd, u16 stype,
@@ -526,3 +528,4 @@ int hostapd_parse_csa_settings(const char *pos,
 
 	return 0;
 }
+

@@ -926,8 +926,8 @@ static void hostapd_event_dfs_nop_finished(struct hostapd_data *hapd,
 #endif /* NEED_AP_MLME */
 
 
-void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
-			  union wpa_event_data *data)
+void hostapd_wpa_event(void *ctx, enum wpa_event_type event,
+		       union wpa_event_data *data)
 {
 	struct hostapd_data *hapd = ctx;
 #ifndef CONFIG_NO_STDOUT_DEBUG
