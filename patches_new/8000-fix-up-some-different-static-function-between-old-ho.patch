@@ -1,0 +1,578 @@
+From 423973a37dfbf56cd40d5a1f5be63981eae87ac3 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Fri, 16 Oct 2015 11:01:29 +0800
+Subject: [PATCH] fix up some different static function between old hostapd and
+ the new
+
+---
+ src/ap/beacon.c              |  52 ++++++++++++-----
+ src/ap/hostapd.c             |  55 +++++++++++++-----
+ src/drivers/driver_nl80211.c |  33 +++++++++--
+ src/odin/odinagent.c         | 135 ++++++++++++++++++++++++++++++++++++++-----
+ 4 files changed, 229 insertions(+), 46 deletions(-)
+
+diff --git a/src/ap/beacon.c b/src/ap/beacon.c
+index e14fcd3..a16e6f4 100644
+--- a/src/ap/beacon.c
++++ b/src/ap/beacon.c
+@@ -964,7 +964,7 @@ int ieee802_11_build_ap_params_odin(struct hostapd_data *hapd,
+ 	size_t resp_len = 0;
+ #ifdef NEED_AP_MLME
+ 	u16 capab_info;
+-	u8 *pos, *tailpos, *old_pos;
++	u8 *pos, *tailpos;
+ 
+ #define BEACON_HEAD_BUF_SIZE 256
+ #define BEACON_TAIL_BUF_SIZE 512
+@@ -991,7 +991,7 @@ int ieee802_11_build_ap_params_odin(struct hostapd_data *hapd,
+ 	head->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
+ 					   WLAN_FC_STYPE_BEACON);
+ 	head->duration = host_to_le16(0);
+-	// modified the broadcast beacon frame to the unicast beacon frame
++	// MagicCG modified the broadcast beacon frame to the unicast beacon frame
+ 	// os_memset(head->da, 0xff, ETH_ALEN);
+ 	os_memcpy(head->da, hapd->conf->accept_mac->addr, ETH_ALEN);
+ 
+@@ -1032,6 +1032,9 @@ int ieee802_11_build_ap_params_odin(struct hostapd_data *hapd,
+ 	tailpos = hostapd_eid_country(hapd, tailpos,
+ 				      tail + BEACON_TAIL_BUF_SIZE - tailpos);
+ 
++	/* Power Constraint element */
++	tailpos = hostapd_eid_pwr_constraint(hapd, tailpos);
++
+ 	/* ERP Information element */
+ 	tailpos = hostapd_eid_erp_info(hapd, tailpos);
+ 
+@@ -1061,11 +1064,8 @@ int ieee802_11_build_ap_params_odin(struct hostapd_data *hapd,
+ 	tailpos = hostapd_eid_interworking(hapd, tailpos);
+ 	tailpos = hostapd_eid_adv_proto(hapd, tailpos);
+ 	tailpos = hostapd_eid_roaming_consortium(hapd, tailpos);
+-	old_pos = tailpos;
+-	tailpos = hostapd_eid_csa(hapd, tailpos);
+-	hapd->iface->cs_c_off_beacon = (old_pos != tailpos) ?
+-		tailpos - tail - 1 : 0;
+-
++	tailpos = hostapd_add_csa_elems(hapd, tailpos, tail,
++					&hapd->iface->cs_c_off_beacon);
+ #ifdef CONFIG_IEEE80211AC
+ 	tailpos = hostapd_eid_vht_capabilities(hapd, tailpos);
+ 	tailpos = hostapd_eid_vht_operation(hapd, tailpos);
+@@ -1097,6 +1097,7 @@ int ieee802_11_build_ap_params_odin(struct hostapd_data *hapd,
+ 
+ #ifdef CONFIG_HS20
+ 	tailpos = hostapd_eid_hs20_indication(hapd, tailpos);
++	tailpos = hostapd_eid_osen(hapd, tailpos);
+ #endif /* CONFIG_HS20 */
+ 
+ 	if (hapd->conf->vendor_elements) {
+@@ -1122,8 +1123,8 @@ int ieee802_11_build_ap_params_odin(struct hostapd_data *hapd,
+ 	params->basic_rates = hapd->iface->basic_rates;
+ 	params->ssid = hapd->conf->ssid.ssid;
+ 	params->ssid_len = hapd->conf->ssid.ssid_len;
+-	params->pairwise_ciphers = hapd->conf->rsn_pairwise ?
+-		hapd->conf->rsn_pairwise : hapd->conf->wpa_pairwise;
++	params->pairwise_ciphers = hapd->conf->wpa_pairwise |
++		hapd->conf->rsn_pairwise;
+ 	params->group_cipher = hapd->conf->wpa_group;
+ 	params->key_mgmt_suites = hapd->conf->wpa_key_mgmt;
+ 	params->auth_algs = hapd->conf->auth_algs;
+@@ -1168,6 +1169,10 @@ int ieee802_11_build_ap_params_odin(struct hostapd_data *hapd,
+ 	params->ap_max_inactivity = hapd->conf->ap_max_inactivity;
+ #ifdef CONFIG_HS20
+ 	params->disable_dgaf = hapd->conf->disable_dgaf;
++	if (hapd->conf->osen) {
++		params->privacy = 1;
++		params->osen = 1;
++	}
+ #endif /* CONFIG_HS20 */
+ 	return 0;
+ }
+@@ -1235,20 +1240,24 @@ fail:
+ 
+ 
+ // added by MagicCG
+-void ieee802_11_set_beacon_odin(struct hostapd_data *hapd)
++int ieee802_11_set_beacon_odin(struct hostapd_data *hapd)
+ {
+ 	struct wpa_driver_ap_params params;
++	struct hostapd_freq_params freq;
++	struct hostapd_iface *iface = hapd->iface;
++	struct hostapd_config *iconf = iface->conf;
+ 	struct wpabuf *beacon, *proberesp, *assocresp;
++	int res, ret = -1;
+ 
+ 	if (hapd->iface->csa_in_progress) {
+ 		wpa_printf(MSG_ERROR, "Cannot set beacons during CSA period");
+-		return;
++		return -1;
+ 	}
+ 
+ 	hapd->beacon_set_done = 1;
+ 
+ 	if (ieee802_11_build_ap_params_odin(hapd, &params) < 0)
+-		return;
++		return -1;
+ 
+ 	if (hostapd_build_ap_extra_ies(hapd, &beacon, &proberesp, &assocresp) <
+ 	    0)
+@@ -1258,11 +1267,26 @@ void ieee802_11_set_beacon_odin(struct hostapd_data *hapd)
+ 	params.proberesp_ies = proberesp;
+ 	params.assocresp_ies = assocresp;
+ 
+-	if (hostapd_drv_set_ap(hapd, &params))
+-		wpa_printf(MSG_ERROR, "Failed to set beacon parameters");
++	if (iface->current_mode &&
++	    hostapd_set_freq_params(&freq, iconf->hw_mode, iface->freq,
++				    iconf->channel, iconf->ieee80211n,
++				    iconf->ieee80211ac,
++				    iconf->secondary_channel,
++				    iconf->vht_oper_chwidth,
++				    iconf->vht_oper_centr_freq_seg0_idx,
++				    iconf->vht_oper_centr_freq_seg1_idx,
++				    iface->current_mode->vht_capab) == 0)
++		params.freq = &freq;
++
++	res = hostapd_drv_set_ap(hapd, &params);
+ 	hostapd_free_ap_extra_ies(hapd, beacon, proberesp, assocresp);
++	if (res)
++		wpa_printf(MSG_ERROR, "Failed to set beacon parameters");
++	else
++		ret = 0;
+ fail:
+ 	ieee802_11_free_ap_params(&params);
++	return ret;
+ }
+ 
+ 
+diff --git a/src/ap/hostapd.c b/src/ap/hostapd.c
+index 3f00c8d..4a53a42 100644
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -451,16 +451,20 @@ static int hostapd_flush_old_stations(struct hostapd_data *hapd, u16 reason)
+ static int hostapd_flush_old_stations_odin(struct hostapd_data *hapd, u16 reason)
+ {
+ 	int ret = 0;
+-	//u8 addr[ETH_ALEN];
++	u8 addr[ETH_ALEN];
+ 
+ 	if (hostapd_drv_none(hapd) || hapd->drv_priv == NULL)
+ 		return 0;
+ 
+-	wpa_dbg(hapd->msg_ctx, MSG_DEBUG, "Flushing old station entries");
+-	if (hostapd_flush(hapd)) {
+-		wpa_msg(hapd->msg_ctx, MSG_WARNING, "Could not connect to "
+-			"kernel driver");
+-		ret = -1;
++	if (!hapd->iface->driver_ap_teardown) {
++		wpa_dbg(hapd->msg_ctx, MSG_DEBUG,
++			"Flushing old station entries");
++
++		if (hostapd_flush(hapd)) {
++			wpa_msg(hapd->msg_ctx, MSG_WARNING,
++				"Could not connect to kernel driver");
++			ret = -1;
++		}
+ 	}
+ 	//wpa_dbg(hapd->msg_ctx, MSG_DEBUG, "Deauthenticate all stations");
+ 	//os_memset(addr, 0xff, ETH_ALEN);
+@@ -944,6 +948,13 @@ static int hostapd_setup_bss_odin(struct hostapd_data *hapd, int first)
+ 	wpa_printf(MSG_DEBUG, "%s(hapd=%p (%s), first=%d)",
+ 		   __func__, hapd, hapd->conf->iface, first);
+ 
++#ifdef EAP_SERVER_TNC
++	if (hapd->conf->tnc && tncs_global_init() < 0) {
++		wpa_printf(MSG_ERROR, "Failed to initialize TNCS");
++		return -1;
++	}
++#endif /* EAP_SERVER_TNC */
++
+ 	if (hapd->started) {
+ 		wpa_printf(MSG_ERROR, "%s: Interface %s was already started",
+ 			   __func__, hapd->conf->iface);
+@@ -979,6 +990,7 @@ static int hostapd_setup_bss_odin(struct hostapd_data *hapd, int first)
+ 				   NULL, first == -1)) {
+ 			wpa_printf(MSG_ERROR, "Failed to add BSS (BSSID="
+ 				   MACSTR ")", MAC2STR(hapd->own_addr));
++			hapd->interface_added = 0;
+ 			return -1;
+ 		}
+ 	}
+@@ -1042,7 +1054,7 @@ static int hostapd_setup_bss_odin(struct hostapd_data *hapd, int first)
+ 		return -1;
+ 	}
+ 
+-	if (wpa_debug_level == MSG_MSGDUMP)
++	if (wpa_debug_level <= MSG_MSGDUMP)
+ 		conf->radius->msg_dumps = 1;
+ #ifndef CONFIG_NO_RADIUS
+ 	hapd->radius = radius_client_init(hapd, conf->radius);
+@@ -1088,7 +1100,7 @@ static int hostapd_setup_bss_odin(struct hostapd_data *hapd, int first)
+ 		return -1;
+ 	}
+ 
+-	if (hapd->conf->wpa && hostapd_setup_wpa(hapd))
++	if ((hapd->conf->wpa || hapd->conf->osen) && hostapd_setup_wpa(hapd))
+ 		return -1;
+ 
+ 	if (accounting_init(hapd)) {
+@@ -1122,8 +1134,8 @@ static int hostapd_setup_bss_odin(struct hostapd_data *hapd, int first)
+ 		return -1;
+ 	}
+ 
+-	if (!hapd->conf->start_disabled)
+-		ieee802_11_set_beacon_odin(hapd);
++	if (!hapd->conf->start_disabled && ieee802_11_set_beacon(hapd) < 0)
++		return -1;
+ 
+ 	if (hapd->wpa_auth && wpa_init_keys(hapd->wpa_auth) < 0)
+ 		return -1;
+@@ -1131,6 +1143,8 @@ static int hostapd_setup_bss_odin(struct hostapd_data *hapd, int first)
+ 	if (hapd->driver && hapd->driver->set_operstate)
+ 		hapd->driver->set_operstate(hapd->drv_priv, 1);
+ 
++	hostapd_ubus_add_bss(hapd);
++
+ 	return 0;
+ }
+ 
+@@ -2316,6 +2330,8 @@ int hostapd_add_iface_odin(struct hapd_interfaces *interfaces, char *buf)
+ 			if (start_ctrl_iface_bss(hapd) < 0 ||
+ 			    (hapd_iface->state == HAPD_IFACE_ENABLED &&
+ 			     hostapd_setup_bss_odin(hapd, -1))) {
++				hostapd_cleanup(hapd);
++				hapd_iface->bss[hapd_iface->num_bss - 1] = NULL;
+ 				hapd_iface->conf->num_bss--;
+ 				hapd_iface->num_bss--;
+ 				wpa_printf(MSG_DEBUG, "%s: free hapd %p %s",
+@@ -2385,14 +2401,17 @@ fail:
+ 		if (hapd_iface->bss) {
+ 			for (i = 0; i < hapd_iface->num_bss; i++) {
+ 				hapd = hapd_iface->bss[i];
+-				if (hapd && hapd_iface->interfaces &&
++				if (!hapd)
++					continue;
++				if (hapd_iface->interfaces &&
+ 				    hapd_iface->interfaces->ctrl_iface_deinit)
+ 					hapd_iface->interfaces->
+ 						ctrl_iface_deinit(hapd);
+ 				wpa_printf(MSG_DEBUG, "%s: free hapd %p (%s)",
+ 					   __func__, hapd_iface->bss[i],
+-					hapd_iface->bss[i]->conf->iface);
+-				os_free(hapd_iface->bss[i]);
++					   hapd->conf->iface);
++				os_free(hapd);
++				hapd_iface->bss[i] = NULL;
+ 			}
+ 			os_free(hapd_iface->bss);
+ 		}
+@@ -2522,6 +2541,10 @@ int hostapd_remove_iface_odin(struct hapd_interfaces *interfaces, char *buf)
+ 			return -1;
+ 		if (!os_strcmp(hapd_iface->conf->bss[0]->iface, buf)) {
+ 			wpa_printf(MSG_INFO, "Remove interface '%s'", buf);
++			hapd_iface->driver_ap_teardown =
++				!!(hapd_iface->drv_flags &
++				   WPA_DRIVER_FLAGS_AP_TEARDOWN_SUPPORT);
++
+ 			hostapd_interface_deinit_free(hapd_iface);
+ 			k = i;
+ 			while (k < (interfaces->count - 1)) {
+@@ -2534,8 +2557,12 @@ int hostapd_remove_iface_odin(struct hapd_interfaces *interfaces, char *buf)
+ 		}
+ 
+ 		for (j = 0; j < hapd_iface->conf->num_bss; j++) {
+-			if (!os_strcmp(hapd_iface->conf->bss[j]->iface, buf))
++			if (!os_strcmp(hapd_iface->conf->bss[j]->iface, buf)) {
++				hapd_iface->driver_ap_teardown =
++					!(hapd_iface->drv_flags &
++					  WPA_DRIVER_FLAGS_AP_TEARDOWN_SUPPORT);
+ 				return hostapd_remove_bss_odin(hapd_iface, j);
++			}
+ 		}
+ 	}
+ 	return -1;
+diff --git a/src/drivers/driver_nl80211.c b/src/drivers/driver_nl80211.c
+index de16b88..9739574 100644
+--- a/src/drivers/driver_nl80211.c
++++ b/src/drivers/driver_nl80211.c
+@@ -12210,6 +12210,12 @@ static int nl80211_create_iface_once_odin(struct wpa_driver_nl80211_data *drv,
+ 		NLA_PUT_U8(msg, NL80211_ATTR_4ADDR, wds);
+ 	}
+ 
++	/*
++	 * Tell cfg80211 that the interface belongs to the socket that created
++	 * it, and the interface should be deleted when the socket is closed.
++	 */
++	NLA_PUT_FLAG(msg, NL80211_ATTR_IFACE_SOCKET_OWNER);
++
+ 	ret = send_and_recv_msgs(drv, msg, handler, arg);
+ 	msg = NULL;
+ 	if (ret) {
+@@ -12230,8 +12236,17 @@ static int nl80211_create_iface_once_odin(struct wpa_driver_nl80211_data *drv,
+ 	if (ifidx <= 0)
+ 		return -1;
+ 
+-	/* start listening for EAPOL on this interface */
+-	add_ifidx(drv, ifidx);
++	/*
++	 * Some virtual interfaces need to process EAPOL packets and events on
++	 * the parent interface. This is used mainly with hostapd.
++	 */
++	if (drv->hostapd ||
++	    iftype == NL80211_IFTYPE_AP_VLAN ||
++	    iftype == NL80211_IFTYPE_WDS ||
++	    iftype == NL80211_IFTYPE_MONITOR) {
++		/* start listening for EAPOL on this interface */
++		add_ifidx(drv, ifidx);
++	}
+ 
+ 	if (addr && iftype != NL80211_IFTYPE_MONITOR &&
+ 	    linux_set_ifhwaddr(drv->global->ioctl_sock, ifname, addr)) {
+@@ -12260,6 +12275,16 @@ static int nl80211_create_iface_odin(struct wpa_driver_nl80211_data *drv,
+ 		if (use_existing) {
+ 			wpa_printf(MSG_DEBUG, "nl80211: Continue using existing interface %s",
+ 				   ifname);
++			if (addr && iftype != NL80211_IFTYPE_MONITOR &&
++			    linux_set_ifhwaddr(drv->global->ioctl_sock, ifname,
++					       addr) < 0 &&
++			    (linux_set_iface_flags(drv->global->ioctl_sock,
++						   ifname, 0) < 0 ||
++			     linux_set_ifhwaddr(drv->global->ioctl_sock, ifname,
++						addr) < 0 ||
++			     linux_set_iface_flags(drv->global->ioctl_sock,
++						   ifname, 1) < 0))
++					return -1;
+ 			return -ENFILE;
+ 		}
+ 		wpa_printf(MSG_INFO, "Try to remove and re-create %s", ifname);
+@@ -12346,7 +12371,7 @@ static int nl80211_create_odin_monitor_interface(void *priv)
+ //	if (add_monitor_filter(drv->monitor_sock)) {
+ //		wpa_printf(MSG_INFO, "Failed to set socket filter for monitor "
+ //			   "interface; do filtering in user space");
+-//		/* This works, but will cost in performance. */
++		/* This works, but will cost in performance. */
+ //	}
+ 
+ 	if (bind(drv->monitor_sock, (struct sockaddr *) &ll, sizeof(ll)) < 0) {
+@@ -12365,7 +12390,7 @@ static int nl80211_create_odin_monitor_interface(void *priv)
+ 	}
+ 
+ 	if (eloop_register_read_sock(drv->monitor_sock, odin_handle_monitor_read,
+-				     NULL, NULL)) {
++				     drv, NULL)) {
+ 		wpa_printf(MSG_INFO, "nl80211: Could not register monitor read socket");
+ 		goto error;
+ 	}
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index d73c0a8..9afc58c 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -480,6 +480,70 @@ static u8 * hostapd_eid_erp_info_odin(struct hostapd_data *hapd, u8 *eid)
+ }
+ 
+ 
++static u8 * hostapd_eid_pwr_constraint_odin(struct hostapd_data *hapd, u8 *eid)
++{
++	u8 *pos = eid;
++	u8 local_pwr_constraint = 0;
++	int dfs;
++
++	if (hapd->iface->current_mode == NULL ||
++	    hapd->iface->current_mode->mode != HOSTAPD_MODE_IEEE80211A)
++		return eid;
++
++	/*
++	 * There is no DFS support and power constraint was not directly
++	 * requested by config option.
++	 */
++	if (!hapd->iconf->ieee80211h &&
++	    hapd->iconf->local_pwr_constraint == -1)
++		return eid;
++
++	/* Check if DFS is required by regulatory. */
++	dfs = hostapd_is_dfs_required(hapd->iface);
++	if (dfs < 0) {
++		wpa_printf(MSG_WARNING, "Failed to check if DFS is required; ret=%d",
++			   dfs);
++		dfs = 0;
++	}
++
++	if (dfs == 0 && hapd->iconf->local_pwr_constraint == -1)
++		return eid;
++
++	/*
++	 * ieee80211h (DFS) is enabled so Power Constraint element shall
++	 * be added when running on DFS channel whenever local_pwr_constraint
++	 * is configured or not. In order to meet regulations when TPC is not
++	 * implemented using a transmit power that is below the legal maximum
++	 * (including any mitigation factor) should help. In this case,
++	 * indicate 3 dB below maximum allowed transmit power.
++	 */
++	if (hapd->iconf->local_pwr_constraint == -1)
++		local_pwr_constraint = 3;
++
++	/*
++	 * A STA that is not an AP shall use a transmit power less than or
++	 * equal to the local maximum transmit power level for the channel.
++	 * The local maximum transmit power can be calculated from the formula:
++	 * local max TX pwr = max TX pwr - local pwr constraint
++	 * Where max TX pwr is maximum transmit power level specified for
++	 * channel in Country element and local pwr constraint is specified
++	 * for channel in this Power Constraint element.
++	 */
++
++	/* Element ID */
++	*pos++ = WLAN_EID_PWR_CONSTRAINT;
++	/* Length */
++	*pos++ = 1;
++	/* Local Power Constraint */
++	if (local_pwr_constraint)
++		*pos++ = local_pwr_constraint;
++	else
++		*pos++ = hapd->iconf->local_pwr_constraint;
++
++	return pos;
++}
++
++
+ static u8 * hostapd_eid_country_add_odin(u8 *pos, u8 *end, int chan_spacing,
+ 				    struct hostapd_channel_data *start,
+ 				    struct hostapd_channel_data *prev)
+@@ -565,7 +629,7 @@ static u8 * hostapd_eid_wpa_odin(struct hostapd_data *hapd, u8 *eid, size_t len)
+ 	const u8 *ie;
+ 	size_t ielen;
+ 
+-	ie = (const u8 *)wpa_auth_get_wpa_ie(hapd->wpa_auth, &ielen);
++	ie = wpa_auth_get_wpa_ie(hapd->wpa_auth, &ielen);
+ 	if (ie == NULL || ielen > len)
+ 		return eid;
+ 
+@@ -578,10 +642,10 @@ static u8 * hostapd_eid_csa_odin(struct hostapd_data *hapd, u8 *eid)
+ {
+ 	u8 chan;
+ 
+-	if (!hapd->iface->cs_freq)
++	if (!hapd->iface->cs_freq_params.freq)
+ 		return eid;
+ 
+-	if (ieee80211_freq_to_chan(hapd->iface->cs_freq, &chan) ==
++	if (ieee80211_freq_to_chan(hapd->iface->cs_freq_params.freq, &chan) ==
+ 	    NUM_HOSTAPD_MODES)
+ 		return eid;
+ 
+@@ -594,6 +658,50 @@ static u8 * hostapd_eid_csa_odin(struct hostapd_data *hapd, u8 *eid)
+ 	return eid;
+ }
+ 
++
++static u8 * hostapd_eid_secondary_channel_odin(struct hostapd_data *hapd, u8 *eid)
++{
++	u8 sec_ch;
++
++	if (!hapd->iface->cs_freq_params.sec_channel_offset)
++		return eid;
++
++	if (hapd->iface->cs_freq_params.sec_channel_offset == -1)
++		sec_ch = HT_INFO_HT_PARAM_SECONDARY_CHNL_BELOW;
++	else if (hapd->iface->cs_freq_params.sec_channel_offset == 1)
++		sec_ch = HT_INFO_HT_PARAM_SECONDARY_CHNL_ABOVE;
++	else
++		return eid;
++
++	*eid++ = WLAN_EID_SECONDARY_CHANNEL_OFFSET;
++	*eid++ = 1;
++	*eid++ = sec_ch;
++
++	return eid;
++}
++
++
++static u8 * hostapd_add_csa_elems_odin(struct hostapd_data *hapd, u8 *pos,
++				  u8 *start, unsigned int *csa_counter_off)
++{
++	u8 *old_pos = pos;
++
++	if (!csa_counter_off)
++		return pos;
++
++	*csa_counter_off = 0;
++	pos = hostapd_eid_csa_odin(hapd, pos);
++
++	if (pos != old_pos) {
++		/* save an offset to the counter - should be last byte */
++		*csa_counter_off = pos - start - 1;
++		pos = hostapd_eid_secondary_channel_odin(hapd, pos);
++	}
++
++	return pos;
++}
++
++
+ static u8 * hostapd_gen_probe_resp_odin(struct hostapd_data *hapd,
+ 				   struct sta_info *sta,
+ 				   EtherAddress dst,
+@@ -602,7 +710,7 @@ static u8 * hostapd_gen_probe_resp_odin(struct hostapd_data *hapd,
+ 				   int is_p2p, size_t *resp_len)
+ {
+ 	struct ieee80211_mgmt *resp;
+-	u8 *pos, *epos, *old_pos;
++	u8 *pos, *epos;
+ 	size_t buflen;
+ //	u8 apple[6] = {0x30, 0x10, 0xe4, 0xec, 0x54, 0xf6};
+ //	u8 bssid_apple[6] = {0x00, 0x1b, 0xb3, 0xec, 0x54, 0xf6};
+@@ -655,6 +763,9 @@ static u8 * hostapd_gen_probe_resp_odin(struct hostapd_data *hapd,
+ 
+ 	pos = hostapd_eid_country_odin(hapd, pos, epos - pos);
+ 
++	/* Power Constraint element */
++	pos = hostapd_eid_pwr_constraint_odin(hapd, pos);
++
+ 	/* ERP Information element */
+ 	pos = hostapd_eid_erp_info_odin(hapd, pos);
+ 
+@@ -680,13 +791,8 @@ static u8 * hostapd_gen_probe_resp_odin(struct hostapd_data *hapd,
+ 	pos = hostapd_eid_adv_proto(hapd, pos);
+ 	pos = hostapd_eid_roaming_consortium(hapd, pos);
+ 
+-	old_pos = pos;
+-	pos = hostapd_eid_csa_odin(hapd, pos);
+-
+-	/* save an offset to the counter - should be last byte */
+-	hapd->iface->cs_c_off_proberesp = (pos != old_pos) ?
+-		pos - (u8 *) resp - 1 : 0;
+-
++	pos = hostapd_add_csa_elems_odin(hapd, pos, (u8 *)resp,
++				    &hapd->iface->cs_c_off_proberesp);
+ #ifdef CONFIG_IEEE80211AC
+ 	pos = hostapd_eid_vht_capabilities(hapd, pos);
+ 	pos = hostapd_eid_vht_operation(hapd, pos);
+@@ -719,6 +825,7 @@ static u8 * hostapd_gen_probe_resp_odin(struct hostapd_data *hapd,
+ 
+ #ifdef CONFIG_HS20
+ 	pos = hostapd_eid_hs20_indication(hapd, pos);
++	pos = hostapd_eid_osen(hapd, pos);
+ #endif /* CONFIG_HS20 */
+ 
+ 	if (hapd->conf->vendor_elements) {
+@@ -1490,7 +1597,7 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 		return;
+ 	}
+ 
+-	if (ieee80211_radiotap_iterator_init(&iter, (void*)buf, len)) {
++	if (ieee80211_radiotap_iterator_init(&iter, (void*)buf, len, NULL)) {
+ 		wpa_printf(MSG_INFO, "nl80211: received invalid radiotap frame");
+ 		return;
+ 	}
+@@ -1533,8 +1640,8 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 		}
+ 	}
+ 
+-	buf_p = buf + iter.max_length;
+-	len_buf_p = len - iter.max_length;
++	buf_p = buf + iter._max_length;
++	len_buf_p = len - iter._max_length;
+ 	hdr = (struct ieee80211_hdr *) buf_p;
+ 	fc = le_to_host16(hdr->frame_control);
+ 	stype = WLAN_FC_GET_STYPE(fc);
+-- 
+1.9.4.msysgit.2
+

@@ -1,0 +1,172 @@
+From 639bfdc3e0a61c535131e471e1b95c6bdb93e916 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Fri, 30 Oct 2015 10:20:50 +0800
+Subject: [PATCH] fixup the bug of not sending beacon frame
+
+---
+ src/odin/odinagent.c | 87 +++++++++++++++++++++++++++++++++++++++++++++++-----
+ src/odin/odinagent.h |  1 +
+ 2 files changed, 80 insertions(+), 8 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index ef27e1d..0952539 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -12,6 +12,7 @@
+ #include "ap/sta_info.h"
+ 
+ void remove_odin_lvaps_all();
++static void send_beacon(EtherAddress dst, EtherAddress bssid, String *my_ssid);
+ 
+ char *protocol_string[15] = {"table", "channel", "interval", "rxstats",
+ 						  "subscriptions", "debug", "report_mean", "spectral_scan",
+@@ -194,6 +195,42 @@ void finish_thread()
+  	pthread_join(odin_thread_id, NULL);
+ }
+ 
++void* beacon_thread(void *arg)
++{
++	c_iterator iter, end;
++	EtherAddress *dst;
++	OdinStationState *state;
++	while (1) {
++		iter = c_map_begin(_sta_mapping_table);
++		end = c_map_end(_sta_mapping_table);
++
++		for(; !ITER_EQUAL(iter, end); ITER_INC(iter))
++		{
++			dst = (EtherAddress *)(((c_ppair)ITER_REF(iter))->first);
++			state = (OdinStationState *)(((c_ppair)ITER_REF(iter))->second);
++			send_beacon(*dst, state->_vap_bssid, &(state->_vap_ssids));
++			wpa_printf(MSG_INFO, "send beacon success!");
++		}
++
++		usleep(100*1000);
++	}
++}
++
++int beacon_thread_init()
++{
++	if((pthread_create(&beacon_thread_id, NULL, (void *) beacon_thread, NULL)) != 0) {
++		wpa_printf(MSG_ERROR, "Create beacon pthread error!");
++		return 0;
++	}
++	return 1;
++}
++
++void finish_beacon_thread()
++{
++  	pthread_cancel(beacon_thread_id);
++ 	pthread_join(beacon_thread_id, NULL);
++}
++
+ protocol_type protocol_string_to_enum(const char *protocol_str)
+ {
+ 	int i;
+@@ -720,7 +757,7 @@ static u8 * hostapd_gen_probe_resp_odin(struct hostapd_data *hapd,
+ 				   EtherAddress dst,
+ 				   EtherAddress bssid,
+ 				   String *my_ssid,
+-				   int is_p2p, size_t *resp_len)
++				   int is_p2p, size_t *resp_len, int is_beacon)
+ {
+ 	struct ieee80211_mgmt *resp;
+ 	u8 *pos, *epos;
+@@ -746,8 +783,14 @@ static u8 * hostapd_gen_probe_resp_odin(struct hostapd_data *hapd,
+ 
+ 	epos = ((u8 *) resp) + MAX_PROBERESP_LEN;
+ 
+-	resp->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
+-					   WLAN_FC_STYPE_PROBE_RESP);
++	if (is_beacon) {
++		resp->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
++				WLAN_FC_STYPE_BEACON);
++	}
++	else {
++		resp->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
++				WLAN_FC_STYPE_PROBE_RESP);
++	}
+ 	os_memcpy(resp->da, dst.mac_addr, ETH_ALEN);//dst->mac_addr, ETH_ALEN);
+ 	os_memcpy(resp->sa, hapd->own_addr, ETH_ALEN);
+ 
+@@ -760,10 +803,18 @@ static u8 * hostapd_gen_probe_resp_odin(struct hostapd_data *hapd,
+ 		host_to_le16(hostapd_own_capab_info(hapd, sta, 1));
+ 
+ 	pos = resp->u.probe_resp.variable;
+-	*pos++ = WLAN_EID_SSID;
+-	*pos++ = my_ssid->length;
+-	os_memcpy(pos, my_ssid->str, my_ssid->length);
+-	pos += my_ssid->length;
++	if (is_beacon) {
++		*pos++ = WLAN_EID_SSID;
++		*pos++ = (my_ssid->length) - 1;
++		os_memcpy(pos, my_ssid->str, (my_ssid->length)-1);
++		pos += (my_ssid->length) - 1;
++	}
++	else {
++		*pos++ = WLAN_EID_SSID;
++		*pos++ = my_ssid->length;
++		os_memcpy(pos, my_ssid->str, my_ssid->length);
++		pos += my_ssid->length;
++	}
+ 
+ 	//wpa_printf(MSG_INFO, MACSTR, MAC2STR(dst.mac_addr));
+ 	//wpa_printf(MSG_INFO, MACSTR, MAC2STR(bssid.mac_addr));
+@@ -858,7 +909,25 @@ static void send_probe_resp(EtherAddress dst, EtherAddress bssid, String *my_ssi
+ 	struct hostapd_data *hapd = interfaces->iface[0]->bss[0];
+ 
+ 	resp = hostapd_gen_probe_resp_odin(hapd, NULL,
+-									dst, bssid, my_ssid, 0, &resp_len);
++									dst, bssid, my_ssid, 0, &resp_len, 0);
++	if (resp == NULL)
++			return;
++
++//	if ((hapd->driver->send_mntr(hapd->drv_priv, resp, resp_len)) < 0)
++//		wpa_printf(MSG_INFO, "handle_probe_resp: send failed");
++	if (hostapd_drv_send_mlme(hapd, resp, resp_len, 0) < 0)
++		wpa_printf(MSG_INFO, "handle_probe_resp: send failed");
++	os_free(resp);
++}
++
++static void send_beacon(EtherAddress dst, EtherAddress bssid, String *my_ssid)
++{
++	u8 *resp;
++	size_t resp_len;
++	struct hostapd_data *hapd = interfaces->iface[0]->bss[0];
++
++	resp = hostapd_gen_probe_resp_odin(hapd, NULL,
++									dst, bssid, my_ssid, 0, &resp_len, 1);
+ 	if (resp == NULL)
+ 			return;
+ 
+@@ -1322,6 +1391,7 @@ void odin_protocol_init(struct hapd_interfaces *ifaces)
+ 	udp_sockfd_init();
+ 	params_init();
+ 	ping_thread_init();
++	beacon_thread_init();
+ 	client_sock_init();
+ 	odin_protocol_init_monitor_interface();
+ }
+@@ -1331,6 +1401,7 @@ void odin_protocol_deinit()
+ 	remove_odin_lvaps_all();
+ 	odin_protocol_deinit_monitor_interface();
+ 	client_sock_deinit();
++	finish_beacon_thread();
+ 	finish_thread();
+ 	params_deinit();
+ 	udp_sockfd_deinit();
+diff --git a/src/odin/odinagent.h b/src/odin/odinagent.h
+index 289255c..5c75c25 100644
+--- a/src/odin/odinagent.h
++++ b/src/odin/odinagent.h
+@@ -158,6 +158,7 @@ extern char *protocol_string[15];
+ 
+ //global thread id
+ pthread_t odin_thread_id;
++pthread_t beacon_thread_id;
+ int server_sockfd, odin_udp_sockfd;
+ c_pvector client_sock_vector;
+ 
+-- 
+1.9.4.msysgit.2
+

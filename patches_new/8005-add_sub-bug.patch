@@ -1,0 +1,29 @@
+From 2519de24bdc828b3247e9601c6b0c354d6fd30b7 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Tue, 20 Oct 2015 21:30:54 +0800
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E6=AD=A3=E5=AF=B9add=5Fsub=E5=8D=8F?=
+ =?UTF-8?q?=E8=AE=AE=E7=9A=84=E5=A4=84=E7=90=86=E8=A7=A3=E6=9E=90bug?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 354fc9a..94565c5 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -1015,7 +1015,7 @@ void parse_odin_protocol(char *buf, int reply_sock)
+ 	    		tp = strsep(&value, " ");
+ 	    		sub_id = atol(tp);
+ 	    		tp = strsep(&value, " ");
+-	    		COPY_STR2MAC(tp, sta_mac.mac_addr);
++	    		COPY_STR2MAC(tp, sta_addr.mac_addr);
+ 	    		//sscanf(tp, MACSTR, sta_addr.mac_addr, sta_addr.mac_addr+1, sta_addr.mac_addr+2,
+ 	    		//		sta_addr.mac_addr+3, sta_addr.mac_addr+4, sta_addr.mac_addr+5);
+ 	    		tp = strsep(&value, " ");
+-- 
+1.9.4.msysgit.2
+

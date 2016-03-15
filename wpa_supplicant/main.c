@@ -12,6 +12,7 @@
 #endif /* __linux__ */
 
 #include "common.h"
+#include "build_features.h"
 #include "wpa_supplicant_i.h"
 #include "driver_i.h"
 #include "p2p_supplicant.h"
@@ -33,7 +34,7 @@ static void usage(void)
 	       "vW] [-P<pid file>] "
 	       "[-g<global ctrl>] \\\n"
 	       "        [-G<group>] \\\n"
-	       "        -i<ifname> -c<config file> [-C<ctrl>] [-D<driver>] "
+	       "        -i<ifname> -c<config file> [-C<ctrl>] [-D<driver>] [-H<hostapd path>] "
 	       "[-p<driver_param>] \\\n"
 	       "        [-b<br_ifname>] [-e<entropy file>]"
 #ifdef CONFIG_DEBUG_FILE
@@ -84,6 +85,7 @@ static void usage(void)
 #endif /* CONFIG_DEBUG_LINUX_TRACING */
 	printf("  -t = include timestamp in debug messages\n"
 	       "  -h = show this help text\n"
+		   "  -H = connect to a hostapd instance to manage state changes\n"
 	       "  -L = show license (BSD)\n"
 	       "  -o = override driver parameter for new interfaces\n"
 	       "  -O = override ctrl_interface parameter for new interfaces\n"
@@ -175,7 +177,7 @@ int main(int argc, char *argv[])
 
 	for (;;) {
 		c = getopt(argc, argv,
-			   "b:Bc:C:D:de:f:g:G:hi:I:KLm:No:O:p:P:qsTtuvW");
+			   "b:Bc:C:D:de:f:g:G:hH:i:I:KLm:No:O:p:P:qsTtuv::W");
 		if (c < 0)
 			break;
 		switch (c) {
@@ -222,6 +224,9 @@ int main(int argc, char *argv[])
 			usage();
 			exitcode = 0;
 			goto out;
+		case 'H':
+			iface->hostapd_ctrl = optarg;
+			break;
 		case 'i':
 			iface->ifname = optarg;
 			break;
@@ -275,8 +280,12 @@ int main(int argc, char *argv[])
 			break;
 #endif /* CONFIG_DBUS */
 		case 'v':
-			printf("%s\n", wpa_supplicant_version);
-			exitcode = 0;
+			if (optarg) {
+				exitcode = !has_feature(optarg);
+			} else {
+				printf("%s\n", wpa_supplicant_version);
+				exitcode = 0;
+			}
 			goto out;
 		case 'W':
 			params.wait_for_monitor++;

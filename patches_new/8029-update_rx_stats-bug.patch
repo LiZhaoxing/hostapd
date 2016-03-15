@@ -1,0 +1,129 @@
+From 760ef9014c396c11a41eefdfdeecbee9c824ef59 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Sun, 13 Dec 2015 16:46:37 +0800
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E6=AD=A3update=5Frx=5Fstats=E7=9A=84b?=
+ =?UTF-8?q?ug?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 67 +++++++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 51 insertions(+), 16 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 22fbe3f..c39da61 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -1132,12 +1132,12 @@ void match_against_subscriptions(StationStats *stats, EtherAddress *src)
+ 	//wpa_printf(MSG_INFO, "match sub: 上传订阅: %s", publish_msg);
+ }
+ 
+-void update_rx_stats(struct ieee80211_hdr *hdr, int datarate,
++void update_rx_stats(u8 *addr, int datarate,
+ 		int rssi_signal, int noise)
+ {
+ 	EtherAddress src;
+ 	EtherAddress *src_p;
+-	memcpy(&src, hdr->addr2, ETH_ALEN);
++	memcpy(&src, addr, ETH_ALEN);
+ 	c_pair *p;
+ 	c_iterator end, target;
+ 	StationStats *stat;
+@@ -1172,12 +1172,29 @@ void update_rx_stats(struct ieee80211_hdr *hdr, int datarate,
+ 
+ const OdinStationState * get_state_by_sta_mac(EtherAddress sta_mac)
+ {
+-	OdinStationState *state;
++	OdinStationState *state = NULL;
+ 
+ 	state = (OdinStationState *)c_map_at(_sta_mapping_table, &sta_mac);
+ 	return state;
+ }
+ 
++int is_sta_allowed(EtherAddress *sta_mac) {
++    c_iterator end, target;
++
++    if (sta_mac == NULL) {
++        return 0;
++    }
++
++    end = c_map_end(_sta_mapping_table);
++    target = c_map_find(_sta_mapping_table, sta_mac);
++
++    if (!ITER_EQUAL(end, target)) {
++        return 1;
++    }
++
++    return 0;
++}
++
+ void recv_auth(unsigned char *buf, int len)
+ {
+ 	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *) buf;
+@@ -1345,31 +1362,49 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 		}
+ 	}
+ 
++    if (rxflags && injected)
++        return;
++
+ 	buf_p = buf + iter._max_length;
+ 	len_buf_p = len - iter._max_length;
+ 	hdr = (struct ieee80211_hdr *) buf_p;
+ 	fc = le_to_host16(hdr->frame_control);
+ 	stype = WLAN_FC_GET_STYPE(fc);
+ 
+-	if ((datarate != 0) &&(ssi_signal != 0)) {
+-		update_rx_stats(hdr, datarate, ssi_signal, noise);
+-//		wpa_printf(MSG_INFO, "odin nl80211: rate is %d Mbps, rssi is %d dbm.", datarate, ssi_signal);
+-	}
++
+ 	switch (WLAN_FC_GET_TYPE(fc)) {
+ 	case WLAN_FC_TYPE_MGMT:
+-		if (stype == WLAN_FC_STYPE_PROBE_REQ) {
+-			//wpa_printf(MSG_INFO, "recvprobe : recv the mgmt, type : %d, stype : %d", WLAN_FC_GET_TYPE(fc), stype);
+-			recv_probe_request(buf_p, len_buf_p);
+-			return;
+-		}
+-		if (stype == WLAN_FC_STYPE_AUTH) {
+-			recv_auth(buf_p, len_buf_p);
+-			return;
+-		}
++	    if (!injected) {
++            if ((datarate != 0) && (ssi_signal != 0)) {
++                update_rx_stats(hdr->addr2, datarate, ssi_signal, noise);
++        //      wpa_printf(MSG_INFO, "odin nl80211: rate is %d Mbps, rssi is %d dbm.", datarate, ssi_signal);
++            }
++            if (stype == WLAN_FC_STYPE_PROBE_REQ) {
++                //wpa_printf(MSG_INFO, "recvprobe : recv the mgmt, type : %d, stype : %d", WLAN_FC_GET_TYPE(fc), stype);
++                recv_probe_request(buf_p, len_buf_p);
++                return;
++            }
++            if (stype == WLAN_FC_STYPE_AUTH) {
++                recv_auth(buf_p, len_buf_p);
++                return;
++            }
++	    }
+ 		break;
+ 	case WLAN_FC_TYPE_CTRL:
+ 		break;
+ 	case WLAN_FC_TYPE_DATA:
++	    if (!injected) {
++            if ((datarate != 0) && (ssi_signal != 0)) {
++                update_rx_stats(hdr->addr2, datarate, ssi_signal, noise);
++        //      wpa_printf(MSG_INFO, "odin nl80211: rate is %d Mbps, rssi is %d dbm.", datarate, ssi_signal);
++            }
++	    }
++	    else {
++            if ((datarate != 0) && (ssi_signal != 0)) {
++                update_rx_stats(hdr->addr1, datarate, ssi_signal, noise);
++        //      wpa_printf(MSG_INFO, "odin nl80211: rate is %d Mbps, rssi is %d dbm.", datarate, ssi_signal);
++            }
++	    }
+ 		break;
+ 	}
+ 
+-- 
+1.9.4.msysgit.2
+

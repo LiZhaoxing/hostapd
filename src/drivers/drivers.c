@@ -10,6 +10,9 @@
 #include "utils/common.h"
 #include "driver.h"
 
+void (*wpa_supplicant_event)(void *ctx, enum wpa_event_type event,
+			     union wpa_event_data *data);
+
 #ifdef CONFIG_DRIVER_WEXT
 extern struct wpa_driver_ops wpa_driver_wext_ops; /* driver_wext.c */
 #endif /* CONFIG_DRIVER_WEXT */

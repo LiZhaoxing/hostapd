@@ -1,0 +1,162 @@
+From eb447e4f599ec83ab5ba76cd1c2b5555e9728e90 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Sat, 12 Dec 2015 21:59:24 +0800
+Subject: [PATCH] =?UTF-8?q?=E7=BB=A7=E7=BB=AD=E8=A7=A3=E5=86=B3segmentatio?=
+ =?UTF-8?q?n=20error=E7=9A=84=E9=97=AE=E9=A2=98=E5=B9=B6=E4=B8=94=E8=A7=A3?=
+ =?UTF-8?q?=E9=99=A4sleep(5)=E7=9A=84=E9=97=AE=E9=A2=98?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 81 ++++++++++++++++++++++++++++++----------------------
+ 1 file changed, 47 insertions(+), 34 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 90fbb59..22fbe3f 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -181,7 +181,7 @@ void* ping_thread(void *arg)
+ 
+ int ping_thread_init()
+ {
+-    sleep(5);
++//  sleep(5);
+ 	if((pthread_create(&odin_thread_id, NULL, (void *) ping_thread, NULL)) != 0) {
+ 		wpa_printf(MSG_ERROR, "Create ping pthread error!");
+ 		return 0;
+@@ -1178,24 +1178,30 @@ const OdinStationState * get_state_by_sta_mac(EtherAddress sta_mac)
+ 	return state;
+ }
+ 
+-void recv_auth(unsigned char *buf)
++void recv_auth(unsigned char *buf, int len)
+ {
+ 	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *) buf;
+ 	unsigned char ssid[HOSTAPD_MAX_SSID_LEN + 1];
+ 	char tmp[SSID_MAX_LEN];
+ 	u16 auth_alg, auth_transaction, status_code;
+ 
++    if (len < IEEE80211_HDRLEN + sizeof(mgmt->u.auth)) {
++        wpa_printf(MSG_INFO, "handle_auth - too short payload (len=%lu)",
++               (unsigned long) len);
++        return;
++    }
++
+ 	auth_alg = le_to_host16(mgmt->u.auth.auth_alg);
+ 	auth_transaction = le_to_host16(mgmt->u.auth.auth_transaction);
+ 	status_code = le_to_host16(mgmt->u.auth.status_code);
+-	wpa_printf(MSG_INFO, "recv auth");
++//	wpa_printf(MSG_INFO, "recv auth");
+ 	if ((auth_transaction == 1) || (auth_transaction == 3)) {
+-	    wpa_printf(MSG_INFO, "recv auth request");
++//	    wpa_printf(MSG_INFO, "recv auth request");
+ 	    if (os_memcmp(mgmt->bssid, interfaces->iface[0]->bss[0]->own_addr, ETH_ALEN) == 0) {
+ 	        os_memcpy(ssid, interfaces->iface[0]->bss[0]->conf->ssid.ssid, interfaces->iface[0]->bss[0]->conf->ssid.ssid_len);
+ 	        ssid[interfaces->iface[0]->bss[0]->conf->ssid.ssid_len] = '\0';
+ 	        sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x %s\n", MAC2STR(mgmt->sa), ssid);
+-	        wpa_printf(MSG_INFO, "recv auth request : %s", tmp);
++//	        wpa_printf(MSG_INFO, "recv auth request : %s", tmp);
+ 	        udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
+ 	    }
+ 	}
+@@ -1211,34 +1217,41 @@ void recv_probe_request(unsigned char *buf, int buf_p_len)
+ 	String *ssid = NULL;
+ 	c_iterator map_end, target;
+ 
+-	if (buf_p_len > 9) {
+-	    ptr = mgmt->u.probe_req.variable;
+-	}
+-	else {
+-	    wpa_printf(MSG_INFO, "recvprobe: the length of recv_probe_request is too short");
+-	    return;
+-	}
++    struct ieee802_11_elems elems;
++    const u8 *ie;
++    size_t ie_len;
+ 
+-wpa_printf(MSG_INFO, "recvprobe: come into the recv_probe_request");
+-	if ((ptr != NULL) && (*ptr == WLAN_EID_SSID)) {
+-		if(ptr[1] == 0) {
+-wpa_printf(MSG_INFO, "recvprobe: ssid empty");
+-			ssid_empty = 1;
+-		}
+-		else {
+-			ssid = malloc(sizeof(String) + (ptr[1] + 1)*sizeof(unsigned char));
+-			ssid->length = (ptr[1] + 1);
+-			if (ssid->length > SSID_MAX_LEN) {
+-				free(ssid);
+-				return;
+-			}
+-			memcpy(ssid->str, ptr+2, ptr[1]*sizeof(unsigned char));
+-			ssid->str[(ssid->length)-1] = '\0';
+-		}
++    ie = mgmt->u.probe_req.variable;
++    if (buf_p_len < IEEE80211_HDRLEN + sizeof(mgmt->u.probe_req))
++        return;
++    ie_len = buf_p_len - (IEEE80211_HDRLEN + sizeof(mgmt->u.probe_req));
++
++    if (ieee802_11_parse_elems(ie, ie_len, &elems, 0) == ParseFailed) {
++        wpa_printf(MSG_INFO, "recvprobe: the length of recv_probe_request is too short");
++        return;
++    }
++
++    if ((!elems.ssid || !elems.supp_rates)) {
++        wpa_printf(MSG_INFO, "odinagent : STA " MACSTR " sent probe request "
++               "without SSID or supported rates element",
++               MAC2STR(mgmt->sa));
++        return;
++    }
++
++//wpa_printf(MSG_INFO, "recvprobe: come into the recv_probe_request");
++	if(elems.ssid_len == 0) {
++//wpa_printf(MSG_INFO, "recvprobe: ssid empty");
++		ssid_empty = 1;
+ 	}
+ 	else {
+-	    wpa_printf(MSG_INFO, "recvprobe: recv_probe_request isn't contain ssid element");
+-	    return;
++		ssid = malloc(sizeof(String) + (elems.ssid_len + 1)*sizeof(unsigned char));
++		ssid->length = (elems.ssid_len + 1);
++		if (ssid->length > SSID_MAX_LEN) {
++			free(ssid);
++			return;
++		}
++		memcpy(ssid->str, elems.ssid, elems.ssid_len);
++		ssid->str[elems.ssid_len] = '\0';
+ 	}
+ 
+ 	memcpy(&src, mgmt->sa, ETH_ALEN);
+@@ -1251,17 +1264,17 @@ wpa_printf(MSG_INFO, "recvprobe: ssid empty");
+ 	}
+ 	if (ssid_empty) {
+ 		sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x \n", MAC2STR(src.mac_addr));
+-wpa_printf(MSG_INFO, "recvprobe : 接收到空ssid的%s", tmp);
++//wpa_printf(MSG_INFO, "recvprobe : 接收到空ssid的%s", tmp);
+ 		udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
+ 		return;
+ 	}
+ 
+ 	sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x %s\n", MAC2STR(src.mac_addr), ssid->str);
+-wpa_printf(MSG_INFO, "recvprobe : 接收到ssid:%s的%s", ssid->str, tmp);
++//wpa_printf(MSG_INFO, "recvprobe : 接收到ssid:%s的%s", ssid->str, tmp);
+ 	udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
+ 	if (ssid != NULL)
+ 		free(ssid);
+-wpa_printf(MSG_INFO, "recvprobe : free ssid success");
++//wpa_printf(MSG_INFO, "recvprobe : free ssid success");
+ }
+ 
+ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+@@ -1350,7 +1363,7 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 			return;
+ 		}
+ 		if (stype == WLAN_FC_STYPE_AUTH) {
+-			recv_auth(buf_p);
++			recv_auth(buf_p, len_buf_p);
+ 			return;
+ 		}
+ 		break;
+-- 
+1.9.4.msysgit.2
+

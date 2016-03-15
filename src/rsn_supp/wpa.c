@@ -1911,6 +1911,8 @@ static u32 wpa_key_mgmt_suite(struct wpa_sm *sm)
 }
 
 
+#ifdef CONFIG_CTRL_IFACE_MIB
+
 #define RSN_SUITE "%02x-%02x-%02x-%d"
 #define RSN_SUITE_ARG(s) \
 ((s) >> 24) & 0xff, ((s) >> 16) & 0xff, ((s) >> 8) & 0xff, (s) & 0xff
@@ -1994,6 +1996,7 @@ int wpa_sm_get_mib(struct wpa_sm *sm, char *buf, size_t buflen)
 
 	return (int) len;
 }
+#endif
 #endif /* CONFIG_CTRL_IFACE */
 
 

@@ -1,0 +1,49 @@
+From 1bf82e783af34b622e6c995634f9d8f762cd6f5f Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Thu, 3 Dec 2015 13:00:27 +0800
+Subject: [PATCH] add some debug info for probe request segmentation fault
+
+---
+ src/odin/odinagent.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index c5ad6db..f7ceb03 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -1213,9 +1213,10 @@ void recv_probe_request(unsigned char *buf)
+ 	EtherAddress src;
+ 	String *ssid = NULL;
+ 	c_iterator map_end, target;
+-//wpa_printf(MSG_INFO, "recvprobe: come into the recv_probe_request");
++wpa_printf(MSG_INFO, "recvprobe: come into the recv_probe_request");
+ 	if ((ptr != NULL) && (*ptr == WLAN_EID_SSID)) {
+ 		if(ptr[1] == 0) {
++wpa_printf(MSG_INFO, "recvprobe: ssid empty");
+ 			ssid_empty = 1;
+ 		}
+ 		else {
+@@ -1240,17 +1241,17 @@ void recv_probe_request(unsigned char *buf)
+ 	}
+ 	if (ssid_empty) {
+ 		sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x \n", MAC2STR(src.mac_addr));
+-		//wpa_printf(MSG_INFO, "recvprobe : 接收到空ssid的%s", tmp);
++wpa_printf(MSG_INFO, "recvprobe : 接收到空ssid的%s", tmp);
+ 		udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
+ 		return;
+ 	}
+ 
+ 	sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x %s\n", MAC2STR(src.mac_addr), ssid->str);
+-//	wpa_printf(MSG_INFO, "recvprobe : 接收到ssid:%s的%s", ssid->str, tmp);
++wpa_printf(MSG_INFO, "recvprobe : 接收到ssid:%s的%s", ssid->str, tmp);
+ 	udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
+ 	if (ssid != NULL)
+ 		free(ssid);
+-	//wpa_printf(MSG_INFO, "recvprobe : free ssid success");
++wpa_printf(MSG_INFO, "recvprobe : free ssid success");
+ }
+ 
+ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+-- 
+1.9.4.msysgit.2
+

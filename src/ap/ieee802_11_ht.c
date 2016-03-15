@@ -221,6 +221,9 @@ void hostapd_2040_coex_action(struct hostapd_data *hapd,
 	if (!(iface->conf->ht_capab & HT_CAP_INFO_SUPP_CHANNEL_WIDTH_SET))
 		return;
 
+	if (iface->conf->noscan)
+		return;
+
 	hdr_len = data - (u8 *) mgmt;
 	if (hdr_len > len)
 		return;
@@ -317,6 +320,9 @@ u16 copy_sta_ht_capab(struct hostapd_data *hapd, struct sta_info *sta,
 void ht40_intolerant_add(struct hostapd_iface *iface, struct sta_info *sta)
 {
 	if (iface->current_mode->mode != HOSTAPD_MODE_IEEE80211G)
+		return;
+
+	if (iface->conf->noscan)
 		return;
 
 	wpa_printf(MSG_INFO, "HT: Forty MHz Intolerant is set by STA " MACSTR

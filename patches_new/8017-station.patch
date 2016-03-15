@@ -1,0 +1,54 @@
+From baba5a5b17faf0903a0657bbbcf3016fb00521a6 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Wed, 25 Nov 2015 21:31:30 +0800
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E6=94=B9station=E7=9A=84=E5=8F=82?=
+ =?UTF-8?q?=E6=95=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 16 +++++++++-------
+ 1 file changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index f0e59cf..b73815c 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -340,9 +340,9 @@ int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress vap_bssid, Str
+ 
+ 	u8 supp_rates[4] = {2, 4, 11, 22};
+ 	struct ieee80211_ht_capabilities cap;
+-	struct hostapd_hw_modes *current_mode;
+-	u16 num_modes;
+-	u16 flags;
++//	struct hostapd_hw_modes *current_mode;
++//	u16 num_modes;
++//	u16 flags;
+ 	//char bss_config[] = "bss_config=phy0:/root/hostapd-swan.conf";
+ 
+ 	target = c_map_find(_sta_mapping_table, &sta_mac);
+@@ -386,14 +386,16 @@ int add_vap (EtherAddress sta_mac, IPAddress sta_ip, EtherAddress vap_bssid, Str
+ 	}
+ 	sta = ap_sta_add(hapd, sta_mac_p->mac_addr);
+ 	memset(&cap, 0, sizeof(cap));
+-	current_mode = hapd->driver->get_hw_feature_data(hapd->drv_priv, &num_modes, &flags);
+-	memcpy(cap.supported_mcs_set, current_mode->mcs_set, 16);
+-	cap.a_mpdu_params = current_mode->a_mpdu_params;
++//	current_mode = hapd->driver->get_hw_feature_data(hapd->drv_priv, &num_modes, &flags);
++	//memcpy(cap.supported_mcs_set, current_mode->mcs_set, 16);
++	cap.supported_mcs_set[0] = 0xff;
++	cap.a_mpdu_params = hapd->iface->current_mode->a_mpdu_params;
++	cap.ht_capabilities_info = host_to_le16(HT_CAP_INFO_SHORT_GI20MHZ);
+ 	sta->aid = 0;
+ 	sta->capability = 0x01;
+ 	sta->supported_rates_len = 4;
+ 	memcpy(&(sta->supported_rates), supp_rates, sta->supported_rates_len);
+-	sta->listen_interval = 100;
++	sta->listen_interval = hapd->iface->conf->beacon_int;
+ 	sta->flags |= WLAN_STA_HT | WLAN_STA_AUTH | WLAN_STA_ASSOC | WLAN_STA_WMM | WLAN_STA_SHORT_PREAMBLE | WLAN_STA_AUTHORIZED;//WPA_STA_AUTHORIZED | WPA_STA_WMM | WPA_STA_SHORT_PREAMBLE;
+ 	sta->qosinfo = 0;
+ 	if (hostapd_sta_add(hapd, sta->addr, sta->aid, sta->capability,
+-- 
+1.9.4.msysgit.2
+

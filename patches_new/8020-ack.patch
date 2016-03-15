@@ -1,0 +1,73 @@
+From 0dee35f387bc22656b43d7cf491935cd042e6eb9 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Thu, 26 Nov 2015 20:34:57 +0800
+Subject: [PATCH] =?UTF-8?q?=E5=8E=BB=E9=99=A4ack=E7=9A=84=E6=9C=BA?=
+ =?UTF-8?q?=E5=88=B6?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index bdbc939..e8f1f5f 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -540,8 +540,8 @@ void parse_odin_protocol(char *buf, int reply_sock)
+ 	EtherAddress vap_bssid;
+ 	String *vap_ssid = NULL;
+ 	int num_ssid = 1;
+-	int fail = 0;
+-	char ack_msg[128] = "";
++//	int fail = 0;
++//	char ack_msg[128] = "";
+ 
+ 	// for the handler_probe_response write handler:
+ 	EtherAddress dst_mac;
+@@ -645,11 +645,11 @@ void parse_odin_protocol(char *buf, int reply_sock)
+     		}
+     		wpa_printf(MSG_INFO, "vap bssid before add_vap");
+     		wpa_printf(MSG_INFO, MACSTR, MAC2STR(vap_bssid.mac_addr));
+-    		fail = add_vap (sta_mac, sta_ip, vap_bssid, vap_ssid);
++    		add_vap (sta_mac, sta_ip, vap_bssid, vap_ssid);
+     		if (vap_ssid != NULL) {
+     			free(vap_ssid);
+     		}
+-    		if (fail == 0) {
++/*    		if (fail == 0) {
+                 strcat(ack_msg, "ack success\n");
+     		}
+     		else {
+@@ -657,15 +657,15 @@ void parse_odin_protocol(char *buf, int reply_sock)
+     		}
+     		if (send(reply_sock, ack_msg, strlen(ack_msg), 0) == -1) {
+     		    wpa_printf(MSG_INFO, "Send the ack error");
+-    		}
++    		}*/
+ 	        break;
+ 	    case handler_set_vap:
+ 	    	break;
+ 	    case handler_remove_vap:
+ 	    	tp = strsep(&value, " ");
+ 	    	COPY_STR2MAC(tp, sta_mac.mac_addr);
+-	    	fail = remove_vap(&sta_mac);
+-            if (fail == 0) {
++	    	remove_vap(&sta_mac);
++/*            if (fail == 0) {
+                 strcat(ack_msg, "ack success\n");
+             }
+             else {
+@@ -673,7 +673,7 @@ void parse_odin_protocol(char *buf, int reply_sock)
+             }
+             if (send(reply_sock, ack_msg, strlen(ack_msg), 0) == -1) {
+                 wpa_printf(MSG_INFO, "Send the ack error");
+-            }
++            }*/
+ 	    	break;
+ 	    case handler_channel:
+ 	    case handler_interval:
+-- 
+1.9.4.msysgit.2
+

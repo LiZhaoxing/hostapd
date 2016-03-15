@@ -67,7 +67,6 @@ static const char *commands_help =
 #ifdef CONFIG_IEEE80211W
 "   sa_query <addr>      send SA Query to a station\n"
 #endif /* CONFIG_IEEE80211W */
-#ifdef CONFIG_WPS
 "   wps_pin <uuid> <pin> [timeout] [addr]  add WPS Enrollee PIN\n"
 "   wps_check_pin <PIN>  verify PIN checksum\n"
 "   wps_pbc              indicate button pushed to initiate PBC\n"
@@ -80,7 +79,6 @@ static const char *commands_help =
 "   wps_ap_pin <cmd> [params..]  enable/disable AP PIN\n"
 "   wps_config <SSID> <auth> <encr> <key>  configure AP\n"
 "   wps_get_status       show current WPS status\n"
-#endif /* CONFIG_WPS */
 "   get_config           show current configuration\n"
 "   help                 show this usage help\n"
 "   interface [ifname]   show interfaces/select interface\n"
@@ -238,28 +236,19 @@ static int hostapd_cli_cmd_mib(struct wpa_ctrl *ctrl, int argc, char *argv[])
 static int hostapd_cli_exec(const char *program, const char *arg1,
 			    const char *arg2)
 {
-	char *cmd;
+	char *arg;
 	size_t len;
 	int res;
-	int ret = 0;
 
-	len = os_strlen(program) + os_strlen(arg1) + os_strlen(arg2) + 3;
-	cmd = os_malloc(len);
-	if (cmd == NULL)
+	len = os_strlen(arg1) + os_strlen(arg2) + 2;
+	arg = os_malloc(len);
+	if (arg == NULL)
 		return -1;
-	res = os_snprintf(cmd, len, "%s %s %s", program, arg1, arg2);
-	if (res < 0 || (size_t) res >= len) {
-		os_free(cmd);
-		return -1;
-	}
-	cmd[len - 1] = '\0';
-#ifndef _WIN32_WCE
-	if (system(cmd) < 0)
-		ret = -1;
-#endif /* _WIN32_WCE */
-	os_free(cmd);
+	os_snprintf(arg, len, "%s %s", arg1, arg2);
+	res = os_exec(program, arg, 1);
+	os_free(arg);
 
-	return ret;
+	return res;
 }
 
 
@@ -362,7 +351,6 @@ static int hostapd_cli_cmd_sa_query(struct wpa_ctrl *ctrl, int argc,
 #endif /* CONFIG_IEEE80211W */
 
 
-#ifdef CONFIG_WPS
 static int hostapd_cli_cmd_wps_pin(struct wpa_ctrl *ctrl, int argc,
 				   char *argv[])
 {
@@ -588,7 +576,6 @@ static int hostapd_cli_cmd_wps_config(struct wpa_ctrl *ctrl, int argc,
 			 ssid_hex, argv[1]);
 	return wpa_ctrl_command(ctrl, buf);
 }
-#endif /* CONFIG_WPS */
 
 
 static int hostapd_cli_cmd_disassoc_imminent(struct wpa_ctrl *ctrl, int argc,
@@ -979,7 +966,6 @@ static struct hostapd_cli_cmd hostapd_cli_commands[] = {
 #ifdef CONFIG_IEEE80211W
 	{ "sa_query", hostapd_cli_cmd_sa_query },
 #endif /* CONFIG_IEEE80211W */
-#ifdef CONFIG_WPS
 	{ "wps_pin", hostapd_cli_cmd_wps_pin },
 	{ "wps_check_pin", hostapd_cli_cmd_wps_check_pin },
 	{ "wps_pbc", hostapd_cli_cmd_wps_pbc },
@@ -993,7 +979,6 @@ static struct hostapd_cli_cmd hostapd_cli_commands[] = {
 	{ "wps_ap_pin", hostapd_cli_cmd_wps_ap_pin },
 	{ "wps_config", hostapd_cli_cmd_wps_config },
 	{ "wps_get_status", hostapd_cli_cmd_wps_get_status },
-#endif /* CONFIG_WPS */
 	{ "disassoc_imminent", hostapd_cli_cmd_disassoc_imminent },
 	{ "ess_disassoc", hostapd_cli_cmd_ess_disassoc },
 	{ "get_config", hostapd_cli_cmd_get_config },

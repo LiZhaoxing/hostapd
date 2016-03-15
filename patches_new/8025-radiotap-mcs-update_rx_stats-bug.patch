@@ -1,0 +1,50 @@
+From 99aa2200410c210d4c0eae335bd00eaffccd2cf1 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Mon, 7 Dec 2015 14:31:11 +0800
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=E6=B2=A1=E6=9C=89=E8=A7=A3?=
+ =?UTF-8?q?=E6=9E=90radiotap=E4=B8=ADmcs=E7=9A=84=E9=83=A8=E5=88=86?=
+ =?UTF-8?q?=EF=BC=8C=E5=B9=B6=E4=B8=94=E4=BF=AE=E5=A4=8Dupdate=5Frx=5Fstat?=
+ =?UTF-8?q?s=E5=87=BD=E6=95=B0=E7=9A=84bug?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index f7ceb03..17f0b4c 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -1148,7 +1148,7 @@ void update_rx_stats(struct ieee80211_hdr *hdr, int datarate,
+ 		src_p = malloc(sizeof(EtherAddress));
+ 		stat = malloc(sizeof(StationStats));
+ 
+-		memset(stat, 0, sizeof(stat));
++		memset(stat, 0, sizeof(*stat));
+ 		memcpy(src_p, &src, sizeof(EtherAddress));
+ 
+ 		p = (c_pair *)malloc(sizeof(c_pair));
+@@ -1257,7 +1257,7 @@ wpa_printf(MSG_INFO, "recvprobe : free ssid success");
+ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ {
+ 	int len;
+-	unsigned char buf[65535];
++	unsigned char buf[3000];
+ 	struct ieee80211_radiotap_iterator iter;
+ 	int ret;
+ 	int datarate = 0, ssi_signal = 0, noise = 0;
+@@ -1316,6 +1316,9 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 		case IEEE80211_RADIOTAP_DBM_ANTNOISE:
+ 			noise = (s8) *iter.this_arg;
+ 			break;
++		case IEEE80211_RADIOTAP_MCS:
++		    datarate = *iter.this_arg + 1; // FIXME:Need to be calculated correctly
++		    break;
+ 		}
+ 	}
+ 
+-- 
+1.9.4.msysgit.2
+

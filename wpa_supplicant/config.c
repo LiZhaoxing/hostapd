@@ -15,6 +15,7 @@
 #include "rsn_supp/wpa.h"
 #include "eap_peer/eap.h"
 #include "p2p/p2p.h"
+#include "drivers/nl80211_copy.h"
 #include "config.h"
 
 
@@ -1527,6 +1528,162 @@ static char * wpa_config_write_psk_list(const struct parse_data *data,
 
 #endif /* CONFIG_P2P */
 
+static int wpa_config_parse_mcast_rate(const struct parse_data *data,
+				       struct wpa_ssid *ssid, int line,
+				       const char *value)
+{
+	ssid->mcast_rate = (int)(strtod(value, NULL) * 10);
+
+	return 0;
+}
+
+#ifndef NO_CONFIG_WRITE
+static char * wpa_config_write_mcast_rate(const struct parse_data *data,
+					  struct wpa_ssid *ssid)
+{
+	char *value;
+	int res;
+
+	if (!ssid->mcast_rate == 0)
+		return NULL;
+
+	value = os_malloc(6); /* longest: 300.0 */
+	if (value == NULL)
+		return NULL;
+	res = os_snprintf(value, 5, "%.1f", (double)ssid->mcast_rate / 10);
+	if (res < 0) {
+		os_free(value);
+		return NULL;
+	}
+	return value;
+}
+#endif /* NO_CONFIG_WRITE */
+
+static int wpa_config_parse_htmode(const struct parse_data *data,
+				   struct wpa_ssid *ssid, int line,
+				   const char *value)
+{
+	int i;
+	static const struct {
+		const char *name;
+		unsigned int val;
+	} htmap[] = {
+		{ .name = "HT20", .val = NL80211_CHAN_HT20, },
+		{ .name = "HT40+", .val = NL80211_CHAN_HT40PLUS, },
+		{ .name = "HT40-", .val = NL80211_CHAN_HT40MINUS, },
+		{ .name = "NOHT", .val = NL80211_CHAN_NO_HT, },
+	};
+	ssid->ht_set = 0;;
+	for (i = 0; i < 4; i++) {
+		if (strcasecmp(htmap[i].name, value) == 0) {
+			ssid->htmode = htmap[i].val;
+			ssid->ht_set = 1;
+			break;
+		}
+	}
+
+	return 0;
+}
+
+#ifndef NO_CONFIG_WRITE
+static char * wpa_config_write_htmode(const struct parse_data *data,
+				      struct wpa_ssid *ssid)
+{
+	char *value;
+	int res;
+
+	value = os_malloc(6); /* longest: HT40+ */
+	if (value == NULL)
+		return NULL;
+
+	switch(ssid->htmode) {
+		case NL80211_CHAN_HT20:
+			res = os_snprintf(value, 4, "HT20");
+			break;
+		case NL80211_CHAN_HT40PLUS:
+			res = os_snprintf(value, 5, "HT40+");
+			break;
+		case NL80211_CHAN_HT40MINUS:
+			res = os_snprintf(value, 5, "HT40-");
+			break;
+		case NL80211_CHAN_NO_HT:
+			res = os_snprintf(value, 4, "NOHT");
+			break;
+		default:
+			os_free(value);
+			return NULL;
+	}
+
+	if (res < 0) {
+		os_free(value);
+		return NULL;
+	}
+
+	return value;
+}
+#endif /* NO_CONFIG_WRITE */
+
+
+static int wpa_config_parse_rates(const struct parse_data *data,
+				  struct wpa_ssid *ssid, int line,
+				  const char *value)
+{
+	int i;
+	char *pos, *r, *sptr, *end;
+	double rate;
+
+	pos = (char *)value;
+	r = strtok_r(pos, ",", &sptr);
+	i = 0;
+	while (pos && i < NL80211_MAX_SUPP_RATES) {
+		rate = 0.0;
+		if (r)
+			rate = strtod(r, &end);
+		ssid->rates[i] = rate * 2;
+		if (*end != '\0' || rate * 2 != ssid->rates[i])
+			return 1;
+
+		i++;
+		r = strtok_r(NULL, ",", &sptr);
+	}
+
+	return 0;
+}
+
+#ifndef NO_CONFIG_WRITE
+static char * wpa_config_write_rates(const struct parse_data *data,
+				     struct wpa_ssid *ssid)
+{
+	char *value, *pos;
+	int res, i;
+
+	if (ssid->rates[0] <= 0)
+		return NULL;
+
+	value = os_malloc(6 * NL80211_MAX_SUPP_RATES + 1);
+	if (value == NULL)
+		return NULL;
+	pos = value;
+	for (i = 0; i < NL80211_MAX_SUPP_RATES - 1; i++) {
+		res = os_snprintf(pos, 6, "%.1f,", (double)ssid->rates[i] / 2);
+		if (res < 0) {
+			os_free(value);
+			return NULL;
+		}
+		pos += res;
+	}
+	res = os_snprintf(pos, 6, "%.1f",
+			  (double)ssid->rates[NL80211_MAX_SUPP_RATES - 1] / 2);
+	if (res < 0) {
+		os_free(value);
+		return NULL;
+	}
+
+	value[6 * NL80211_MAX_SUPP_RATES] = '\0';
+	return value;
+}
+#endif /* NO_CONFIG_WRITE */
+
 /* Helper macros for network block parser */
 
 #ifdef OFFSET
@@ -1733,6 +1890,10 @@ static const struct parse_data ssid_fields[] = {
 	{ INT(ap_max_inactivity) },
 	{ INT(dtim_period) },
 	{ INT(beacon_int) },
+	{ INT_RANGE(fixed_freq, 0, 1) },
+	{ FUNC(rates) },
+	{ FUNC(mcast_rate) },
+	{ FUNC(htmode) },
 #ifdef CONFIG_MACSEC
 	{ INT_RANGE(macsec_policy, 0, 1) },
 #endif /* CONFIG_MACSEC */

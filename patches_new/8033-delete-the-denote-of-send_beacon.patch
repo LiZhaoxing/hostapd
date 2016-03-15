@@ -1,0 +1,25 @@
+From 205fbc449d06cad9533cfe13b2773818f6978edd Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Fri, 8 Jan 2016 09:09:22 +0800
+Subject: [PATCH] delete the denote of send_beacon
+
+---
+ src/odin/odinagent.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 38dc872..7106466 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -214,7 +214,7 @@ void* beacon_thread(void *arg)
+             dst = (EtherAddress *)(((c_ppair)ITER_REF(iter))->first);
+             state = (OdinStationState *)(((c_ppair)ITER_REF(iter))->second);
+             send_beacon(*dst, state->_vap_bssid, &(state->_vap_ssids));
+-            wpa_printf(MSG_INFO, "send beacon success!");
++//            wpa_printf(MSG_INFO, "send beacon success!");
+         }
+ 
+         usleep(interfaces->iface[0]->bss[0]->iconf->beacon_int*1000);
+-- 
+1.9.4.msysgit.2
+

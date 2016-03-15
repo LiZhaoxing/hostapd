@@ -37,6 +37,7 @@
 #include "wps/wps.h"
 #include "config_file.h"
 #include "ctrl_iface.h"
+#include "config_file.h"
 
 
 struct wpa_ctrl_dst {
@@ -47,6 +48,7 @@ struct wpa_ctrl_dst {
 	int errors;
 };
 
+static char *reload_opts = NULL;
 
 static void hostapd_ctrl_iface_send(struct hostapd_data *hapd, int level,
 				    const char *buf, size_t len);
@@ -156,6 +158,68 @@ static int hostapd_ctrl_iface_new_sta(struct hostapd_data *hapd,
 	return 0;
 }
 
+static int hostapd_ctrl_iface_set_down(struct hostapd_data *hapd)
+{
+	if (hapd->driver->stop_ap)
+		hapd->driver->stop_ap(hapd->drv_priv);
+	return 0;
+}
+
+static char *get_option(char *opt, char *str)
+{
+	int len = strlen(str);
+
+	if (!strncmp(opt, str, len))
+		return opt + len;
+	else
+		return NULL;
+}
+
+static struct hostapd_config *hostapd_ctrl_iface_config_read(const char *fname)
+{
+	struct hostapd_config *conf;
+	char *opt, *val;
+
+	conf = hostapd_config_read(fname);
+	if (!conf)
+		return NULL;
+
+	for (opt = strtok(reload_opts, " ");
+	     opt;
+		 opt = strtok(NULL, " ")) {
+
+		if ((val = get_option(opt, "channel=")))
+			conf->channel = atoi(val);
+		else if ((val = get_option(opt, "ht_capab=")))
+			conf->ht_capab = atoi(val);
+		else if ((val = get_option(opt, "ht_capab_mask=")))
+			conf->ht_capab &= atoi(val);
+		else if ((val = get_option(opt, "sec_chan=")))
+			conf->secondary_channel = atoi(val);
+		else if ((val = get_option(opt, "hw_mode=")))
+			conf->hw_mode = atoi(val);
+		else if ((val = get_option(opt, "ieee80211n=")))
+			conf->ieee80211n = atoi(val);
+		else
+			break;
+	}
+
+	return conf;
+}
+
+static int hostapd_ctrl_iface_update(struct hostapd_data *hapd, char *txt)
+{
+	struct hostapd_config * (*config_read_cb)(const char *config_fname);
+	struct hostapd_iface *iface = hapd->iface;
+
+	config_read_cb = iface->interfaces->config_read_cb;
+	iface->interfaces->config_read_cb = hostapd_ctrl_iface_config_read;
+	reload_opts = txt;
+
+	hostapd_reload_config(iface);
+
+	iface->interfaces->config_read_cb = config_read_cb;
+}
 
 #ifdef CONFIG_IEEE80211W
 #ifdef NEED_AP_MLME
@@ -475,6 +539,9 @@ static int hostapd_ctrl_iface_wps_ap_pin(struct hostapd_data *hapd, char *txt,
 	int timeout = 300;
 	char *pos;
 	const char *pin_txt;
+
+	if (!hapd->wps)
+		return -1;
 
 	pos = os_strchr(txt, ' ');
 	if (pos)
@@ -1383,6 +1450,7 @@ static void hostapd_ctrl_iface_receive(int sock, void *eloop_ctx,
 						      reply_size);
 	} else if (os_strcmp(buf, "STATUS-DRIVER") == 0) {
 		reply_len = hostapd_drv_status(hapd, reply, reply_size);
+#ifdef CONFIG_CTRL_IFACE_MIB
 	} else if (os_strcmp(buf, "MIB") == 0) {
 		reply_len = ieee802_11_get_mib(hapd, reply, reply_size);
 		if (reply_len >= 0) {
@@ -1424,6 +1492,7 @@ static void hostapd_ctrl_iface_receive(int sock, void *eloop_ctx,
 	} else if (os_strncmp(buf, "STA-NEXT ", 9) == 0) {
 		reply_len = hostapd_ctrl_iface_sta_next(hapd, buf + 9, reply,
 							reply_size);
+#endif
 	} else if (os_strcmp(buf, "ATTACH") == 0) {
 		if (hostapd_ctrl_iface_attach(hapd, &from, fromlen))
 			reply_len = -1;
@@ -1546,6 +1615,10 @@ static void hostapd_ctrl_iface_receive(int sock, void *eloop_ctx,
 	} else if (os_strncmp(buf, "VENDOR ", 7) == 0) {
 		reply_len = hostapd_ctrl_iface_vendor(hapd, buf + 7, reply,
 						      reply_size);
+	} else if (os_strcmp(buf, "DOWN") == 0) {
+		hostapd_ctrl_iface_set_down(hapd);
+	} else if (os_strncmp(buf, "UPDATE ", 7) == 0) {
+		hostapd_ctrl_iface_update(hapd, buf + 7);
 
 	} else {
 		os_memcpy(reply, "UNKNOWN COMMAND\n", 16);

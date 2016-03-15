@@ -70,6 +70,16 @@ static void hostapd_reload_bss(struct hostapd_data *hapd)
 #endif /* CONFIG_NO_RADIUS */
 
 	ssid = &hapd->conf->ssid;
+
+	hostapd_set_freq(hapd, hapd->iconf->hw_mode, hapd->iface->freq,
+			 hapd->iconf->channel,
+			 hapd->iconf->ieee80211n,
+			 hapd->iconf->ieee80211ac,
+			 hapd->iconf->secondary_channel,
+			 hapd->iconf->vht_oper_chwidth,
+			 hapd->iconf->vht_oper_centr_freq_seg0_idx,
+			 hapd->iconf->vht_oper_centr_freq_seg1_idx);
+
 	if (!ssid->wpa_psk_set && ssid->wpa_psk && !ssid->wpa_psk->next &&
 	    ssid->wpa_passphrase_set && ssid->wpa_passphrase) {
 		/*
@@ -170,20 +180,12 @@ int hostapd_reload_config(struct hostapd_iface *iface)
 	oldconf = hapd->iconf;
 	iface->conf = newconf;
 
+	if (iface->conf->channel)
+		iface->freq = hostapd_hw_get_freq(hapd, iface->conf->channel);
+
 	for (j = 0; j < iface->num_bss; j++) {
 		hapd = iface->bss[j];
 		hapd->iconf = newconf;
-		hapd->iconf->channel = oldconf->channel;
-		hapd->iconf->secondary_channel = oldconf->secondary_channel;
-		hapd->iconf->ieee80211n = oldconf->ieee80211n;
-		hapd->iconf->ieee80211ac = oldconf->ieee80211ac;
-		hapd->iconf->ht_capab = oldconf->ht_capab;
-		hapd->iconf->vht_capab = oldconf->vht_capab;
-		hapd->iconf->vht_oper_chwidth = oldconf->vht_oper_chwidth;
-		hapd->iconf->vht_oper_centr_freq_seg0_idx =
-			oldconf->vht_oper_centr_freq_seg0_idx;
-		hapd->iconf->vht_oper_centr_freq_seg1_idx =
-			oldconf->vht_oper_centr_freq_seg1_idx;
 		hapd->conf = newconf->bss[j];
 		hostapd_reload_bss(hapd);
 	}
@@ -260,6 +262,7 @@ static void hostapd_free_hapd_data(struct hostapd_data *hapd)
 	hapd->started = 0;
 
 	wpa_printf(MSG_DEBUG, "%s(%s)", __func__, hapd->conf->iface);
+	hostapd_ubus_free_bss(hapd);
 	iapp_deinit(hapd->iapp);
 	hapd->iapp = NULL;
 	accounting_deinit(hapd);
@@ -438,6 +441,34 @@ static int hostapd_flush_old_stations(struct hostapd_data *hapd, u16 reason)
 	wpa_dbg(hapd->msg_ctx, MSG_DEBUG, "Deauthenticate all stations");
 	os_memset(addr, 0xff, ETH_ALEN);
 	hostapd_drv_sta_deauth(hapd, addr, reason);
+	hostapd_free_stas(hapd);
+
+	return ret;
+}
+
+
+//added by MagicCG
+static int hostapd_flush_old_stations_odin(struct hostapd_data *hapd, u16 reason)
+{
+	int ret = 0;
+	u8 addr[ETH_ALEN];
+
+	if (hostapd_drv_none(hapd) || hapd->drv_priv == NULL)
+		return 0;
+
+	if (!hapd->iface->driver_ap_teardown) {
+		wpa_dbg(hapd->msg_ctx, MSG_DEBUG,
+			"Flushing old station entries");
+
+		if (hostapd_flush(hapd)) {
+			wpa_msg(hapd->msg_ctx, MSG_WARNING,
+				"Could not connect to kernel driver");
+			ret = -1;
+		}
+	}
+	//wpa_dbg(hapd->msg_ctx, MSG_DEBUG, "Deauthenticate all stations");
+	//os_memset(addr, 0xff, ETH_ALEN);
+	//hostapd_drv_sta_deauth(hapd, addr, reason);
 	hostapd_free_stas(hapd);
 
 	return ret;
@@ -888,6 +919,232 @@ static int hostapd_setup_bss(struct hostapd_data *hapd, int first)
 	if (hapd->driver && hapd->driver->set_operstate)
 		hapd->driver->set_operstate(hapd->drv_priv, 1);
 
+	hostapd_ubus_add_bss(hapd);
+
+	return 0;
+}
+
+
+/**
+ * added by MagicCG
+ * hostapd_setup_bss_odin - Per-BSS setup (initialization)
+ * @hapd: Pointer to BSS data
+ * @first: Whether this BSS is the first BSS of an interface; -1 = not first,
+ *	but interface may exist
+ *
+ * This function is used to initialize all per-BSS data structures and
+ * resources. This gets called in a loop for each BSS when an interface is
+ * initialized. Most of the modules that are initialized here will be
+ * deinitialized in hostapd_cleanup().
+ */
+static int hostapd_setup_bss_odin(struct hostapd_data *hapd, int first)
+{
+	struct hostapd_bss_config *conf = hapd->conf;
+	u8 ssid[HOSTAPD_MAX_SSID_LEN + 1];
+	int ssid_len, set_ssid;
+	char force_ifname[IFNAMSIZ];
+	u8 if_addr[ETH_ALEN];
+
+	wpa_printf(MSG_DEBUG, "%s(hapd=%p (%s), first=%d)",
+		   __func__, hapd, hapd->conf->iface, first);
+
+#ifdef EAP_SERVER_TNC
+	if (hapd->conf->tnc && tncs_global_init() < 0) {
+		wpa_printf(MSG_ERROR, "Failed to initialize TNCS");
+		return -1;
+	}
+#endif /* EAP_SERVER_TNC */
+
+	if (hapd->started) {
+		wpa_printf(MSG_ERROR, "%s: Interface %s was already started",
+			   __func__, hapd->conf->iface);
+		return -1;
+	}
+	hapd->started = 1;
+
+	if (!first || first == -1) {
+		if (hostapd_mac_comp_empty(hapd->conf->bssid) == 0) {
+			/* Allocate the next available BSSID. */
+			do {
+				inc_byte_array(hapd->own_addr, ETH_ALEN);
+			} while (mac_in_conf(hapd->iconf, hapd->own_addr));
+		} else {
+			/* Allocate the configured BSSID. */
+			os_memcpy(hapd->own_addr, hapd->conf->bssid, ETH_ALEN);
+
+			if (hostapd_mac_comp(hapd->own_addr,
+					     hapd->iface->bss[0]->own_addr) ==
+			    0) {
+				wpa_printf(MSG_ERROR, "BSS '%s' may not have "
+					   "BSSID set to the MAC address of "
+					   "the radio", hapd->conf->iface);
+				return -1;
+			}
+		}
+
+		hapd->interface_added = 1;
+		if (hostapd_if_add(hapd->iface->bss[0], WPA_IF_AP_BSS,
+				   hapd->conf->iface, hapd->own_addr, hapd,
+				   &hapd->drv_priv, force_ifname, if_addr,
+				   hapd->conf->bridge[0] ? hapd->conf->bridge :
+				   NULL, first == -1)) {
+			wpa_printf(MSG_ERROR, "Failed to add BSS (BSSID="
+				   MACSTR ")", MAC2STR(hapd->own_addr));
+			hapd->interface_added = 0;
+			return -1;
+		}
+	}
+
+	if (conf->wmm_enabled < 0)
+		conf->wmm_enabled = hapd->iconf->ieee80211n;
+
+	hostapd_flush_old_stations_odin(hapd, WLAN_REASON_PREV_AUTH_NOT_VALID);
+	hostapd_set_privacy(hapd, 0);
+
+	hostapd_broadcast_wep_clear(hapd);
+	if (hostapd_setup_encryption(hapd->conf->iface, hapd))
+		return -1;
+
+	/*
+	 * Fetch the SSID from the system and use it or,
+	 * if one was specified in the config file, verify they
+	 * match.
+	 */
+	ssid_len = hostapd_get_ssid(hapd, ssid, sizeof(ssid));
+	if (ssid_len < 0) {
+		wpa_printf(MSG_ERROR, "Could not read SSID from system");
+		return -1;
+	}
+	if (conf->ssid.ssid_set) {
+		/*
+		 * If SSID is specified in the config file and it differs
+		 * from what is being used then force installation of the
+		 * new SSID.
+		 */
+		set_ssid = (conf->ssid.ssid_len != (size_t) ssid_len ||
+			    os_memcmp(conf->ssid.ssid, ssid, ssid_len) != 0);
+	} else {
+		/*
+		 * No SSID in the config file; just use the one we got
+		 * from the system.
+		 */
+		set_ssid = 0;
+		conf->ssid.ssid_len = ssid_len;
+		os_memcpy(conf->ssid.ssid, ssid, conf->ssid.ssid_len);
+	}
+
+	if (!hostapd_drv_none(hapd)) {
+		wpa_printf(MSG_ERROR, "Using interface %s with hwaddr " MACSTR
+			   " and ssid \"%s\"",
+			   hapd->conf->iface, MAC2STR(hapd->own_addr),
+			   wpa_ssid_txt(hapd->conf->ssid.ssid,
+					hapd->conf->ssid.ssid_len));
+	}
+
+	if (hostapd_setup_wpa_psk(conf)) {
+		wpa_printf(MSG_ERROR, "WPA-PSK setup failed.");
+		return -1;
+	}
+
+	/* Set SSID for the kernel driver (to be used in beacon and probe
+	 * response frames) */
+	if (set_ssid && hostapd_set_ssid(hapd, conf->ssid.ssid,
+					 conf->ssid.ssid_len)) {
+		wpa_printf(MSG_ERROR, "Could not set SSID for kernel driver");
+		return -1;
+	}
+
+	if (wpa_debug_level <= MSG_MSGDUMP)
+		conf->radius->msg_dumps = 1;
+#ifndef CONFIG_NO_RADIUS
+	hapd->radius = radius_client_init(hapd, conf->radius);
+	if (hapd->radius == NULL) {
+		wpa_printf(MSG_ERROR, "RADIUS client initialization failed.");
+		return -1;
+	}
+
+	if (hapd->conf->radius_das_port) {
+		struct radius_das_conf das_conf;
+		os_memset(&das_conf, 0, sizeof(das_conf));
+		das_conf.port = hapd->conf->radius_das_port;
+		das_conf.shared_secret = hapd->conf->radius_das_shared_secret;
+		das_conf.shared_secret_len =
+			hapd->conf->radius_das_shared_secret_len;
+		das_conf.client_addr = &hapd->conf->radius_das_client_addr;
+		das_conf.time_window = hapd->conf->radius_das_time_window;
+		das_conf.require_event_timestamp =
+			hapd->conf->radius_das_require_event_timestamp;
+		das_conf.ctx = hapd;
+		das_conf.disconnect = hostapd_das_disconnect;
+		hapd->radius_das = radius_das_init(&das_conf);
+		if (hapd->radius_das == NULL) {
+			wpa_printf(MSG_ERROR, "RADIUS DAS initialization "
+				   "failed.");
+			return -1;
+		}
+	}
+#endif /* CONFIG_NO_RADIUS */
+
+	if (hostapd_acl_init(hapd)) {
+		wpa_printf(MSG_ERROR, "ACL initialization failed.");
+		return -1;
+	}
+	if (hostapd_init_wps(hapd, conf))
+		return -1;
+
+	if (authsrv_init(hapd) < 0)
+		return -1;
+
+	if (ieee802_1x_init(hapd)) {
+		wpa_printf(MSG_ERROR, "IEEE 802.1X initialization failed.");
+		return -1;
+	}
+
+	if ((hapd->conf->wpa || hapd->conf->osen) && hostapd_setup_wpa(hapd))
+		return -1;
+
+	if (accounting_init(hapd)) {
+		wpa_printf(MSG_ERROR, "Accounting initialization failed.");
+		return -1;
+	}
+
+	if (hapd->conf->ieee802_11f &&
+	    (hapd->iapp = iapp_init(hapd, hapd->conf->iapp_iface)) == NULL) {
+		wpa_printf(MSG_ERROR, "IEEE 802.11F (IAPP) initialization "
+			   "failed.");
+		return -1;
+	}
+
+#ifdef CONFIG_INTERWORKING
+	if (gas_serv_init(hapd)) {
+		wpa_printf(MSG_ERROR, "GAS server initialization failed");
+		return -1;
+	}
+
+	if (conf->qos_map_set_len &&
+	    hostapd_drv_set_qos_map(hapd, conf->qos_map_set,
+				    conf->qos_map_set_len)) {
+		wpa_printf(MSG_ERROR, "Failed to initialize QoS Map");
+		return -1;
+	}
+#endif /* CONFIG_INTERWORKING */
+
+	if (!hostapd_drv_none(hapd) && vlan_init(hapd)) {
+		wpa_printf(MSG_ERROR, "VLAN initialization failed.");
+		return -1;
+	}
+
+	if (!hapd->conf->start_disabled && ieee802_11_set_beacon(hapd) < 0)
+		return -1;
+
+	if (hapd->wpa_auth && wpa_init_keys(hapd->wpa_auth) < 0)
+		return -1;
+
+	if (hapd->driver && hapd->driver->set_operstate)
+		hapd->driver->set_operstate(hapd->drv_priv, 1);
+
+	hostapd_ubus_add_bss(hapd);
+
 	return 0;
 }
 
@@ -1178,6 +1435,7 @@ int hostapd_setup_interface_complete(struct hostapd_iface *iface, int err)
 	if (err)
 		goto fail;
 
+	hostapd_ubus_add_iface(iface);
 	wpa_printf(MSG_DEBUG, "Completing interface initialization");
 	if (iface->conf->channel) {
 #ifdef NEED_AP_MLME
@@ -1295,6 +1553,7 @@ int hostapd_setup_interface_complete(struct hostapd_iface *iface, int err)
 
 fail:
 	wpa_printf(MSG_ERROR, "Interface initialization failed");
+	hostapd_ubus_free_iface(iface);
 	hostapd_set_state(iface, HAPD_IFACE_DISABLED);
 	wpa_msg(hapd->msg_ctx, MSG_INFO, AP_EVENT_DISABLED);
 	if (iface->interfaces && iface->interfaces->terminate_on_error)
@@ -1372,6 +1631,18 @@ static void hostapd_bss_deinit(struct hostapd_data *hapd)
 	wpa_printf(MSG_DEBUG, "%s: deinit bss %s", __func__,
 		   hapd->conf->iface);
 	hostapd_bss_deinit_no_free(hapd);
+	hostapd_cleanup(hapd);
+}
+
+
+//added by MagicCG
+static void hostapd_bss_deinit_odin(struct hostapd_data *hapd)
+{
+	wpa_printf(MSG_DEBUG, "%s: deinit bss %s", __func__,
+		   hapd->conf->iface);
+	hostapd_free_stas(hapd);
+	hostapd_flush_old_stations_odin(hapd, WLAN_REASON_DEAUTH_LEAVING);
+	hostapd_clear_wep(hapd);
 	hostapd_cleanup(hapd);
 }
 
@@ -1621,6 +1892,7 @@ void hostapd_interface_deinit_free(struct hostapd_iface *iface)
 		   (unsigned int) iface->conf->num_bss);
 	driver = iface->bss[0]->driver;
 	drv_priv = iface->bss[0]->drv_priv;
+	hostapd_ubus_free_iface(iface);
 	hostapd_interface_deinit(iface);
 	wpa_printf(MSG_DEBUG, "%s: driver=%p drv_priv=%p -> hapd_deinit",
 		   __func__, driver, drv_priv);
@@ -1998,6 +2270,159 @@ fail:
 }
 
 
+//added by MagicCG
+int hostapd_add_iface_odin(struct hapd_interfaces *interfaces, char *buf)
+{
+	struct hostapd_config *conf = NULL;
+	struct hostapd_iface *hapd_iface = NULL, *new_iface = NULL;
+	struct hostapd_data *hapd;
+	char *ptr;
+	size_t i, j;
+	const char *conf_file = NULL, *phy_name = NULL;
+
+	if (os_strncmp(buf, "bss_config=", 11) == 0) {
+		char *pos;
+		phy_name = buf + 11;
+		pos = os_strchr(phy_name, ':');
+		if (!pos)
+			return -1;
+		*pos++ = '\0';
+		conf_file = pos;
+		if (!os_strlen(conf_file))
+			return -1;
+
+		hapd_iface = hostapd_interface_init_bss(interfaces, phy_name,
+							conf_file, 0);
+		if (!hapd_iface)
+			return -1;
+		for (j = 0; j < interfaces->count; j++) {
+			if (interfaces->iface[j] == hapd_iface)
+				break;
+		}
+		if (j == interfaces->count) {
+			struct hostapd_iface **tmp;
+			tmp = os_realloc_array(interfaces->iface,
+					       interfaces->count + 1,
+					       sizeof(struct hostapd_iface *));
+			if (!tmp) {
+				hostapd_interface_deinit_free(hapd_iface);
+				return -1;
+			}
+			interfaces->iface = tmp;
+			interfaces->iface[interfaces->count++] = hapd_iface;
+			new_iface = hapd_iface;
+		}
+
+		if (new_iface) {
+			if (interfaces->driver_init(hapd_iface) ||
+			    hostapd_setup_interface(hapd_iface)) {
+				interfaces->count--;
+				goto fail;
+			}
+		} else {
+			/* Assign new BSS with bss[0]'s driver info */
+			hapd = hapd_iface->bss[hapd_iface->num_bss - 1];
+			hapd->driver = hapd_iface->bss[0]->driver;
+			hapd->drv_priv = hapd_iface->bss[0]->drv_priv;
+			os_memcpy(hapd->own_addr, hapd_iface->bss[0]->own_addr,
+				  ETH_ALEN);
+
+			if (start_ctrl_iface_bss(hapd) < 0 ||
+			    (hapd_iface->state == HAPD_IFACE_ENABLED &&
+			     hostapd_setup_bss_odin(hapd, -1))) {
+				hostapd_cleanup(hapd);
+				hapd_iface->bss[hapd_iface->num_bss - 1] = NULL;
+				hapd_iface->conf->num_bss--;
+				hapd_iface->num_bss--;
+				wpa_printf(MSG_DEBUG, "%s: free hapd %p %s",
+					   __func__, hapd, hapd->conf->iface);
+				os_free(hapd);
+				return -1;
+			}
+		}
+		return 0;
+	}
+
+	ptr = os_strchr(buf, ' ');
+	if (ptr == NULL)
+		return -1;
+	*ptr++ = '\0';
+
+	if (os_strncmp(ptr, "config=", 7) == 0)
+		conf_file = ptr + 7;
+
+	for (i = 0; i < interfaces->count; i++) {
+		if (!os_strcmp(interfaces->iface[i]->conf->bss[0]->iface,
+			       buf)) {
+			wpa_printf(MSG_INFO, "Cannot add interface - it "
+				   "already exists");
+			return -1;
+		}
+	}
+
+	hapd_iface = hostapd_iface_alloc(interfaces);
+	if (hapd_iface == NULL) {
+		wpa_printf(MSG_ERROR, "%s: Failed to allocate memory "
+			   "for interface", __func__);
+		goto fail;
+	}
+
+	if (conf_file && interfaces->config_read_cb) {
+		conf = interfaces->config_read_cb(conf_file);
+		if (conf && conf->bss)
+			os_strlcpy(conf->bss[0]->iface, buf,
+				   sizeof(conf->bss[0]->iface));
+	} else
+		conf = hostapd_config_alloc(interfaces, buf, ptr);
+	if (conf == NULL || conf->bss == NULL) {
+		wpa_printf(MSG_ERROR, "%s: Failed to allocate memory "
+			   "for configuration", __func__);
+		goto fail;
+	}
+
+	hapd_iface = hostapd_data_alloc(interfaces, conf);
+	if (hapd_iface == NULL) {
+		wpa_printf(MSG_ERROR, "%s: Failed to allocate memory "
+			   "for hostapd", __func__);
+		goto fail;
+	}
+
+	if (start_ctrl_iface(hapd_iface) < 0)
+		goto fail;
+
+	wpa_printf(MSG_INFO, "Add interface '%s'", conf->bss[0]->iface);
+
+	return 0;
+
+fail:
+	if (conf)
+		hostapd_config_free(conf);
+	if (hapd_iface) {
+		if (hapd_iface->bss) {
+			for (i = 0; i < hapd_iface->num_bss; i++) {
+				hapd = hapd_iface->bss[i];
+				if (!hapd)
+					continue;
+				if (hapd_iface->interfaces &&
+				    hapd_iface->interfaces->ctrl_iface_deinit)
+					hapd_iface->interfaces->
+						ctrl_iface_deinit(hapd);
+				wpa_printf(MSG_DEBUG, "%s: free hapd %p (%s)",
+					   __func__, hapd_iface->bss[i],
+					   hapd->conf->iface);
+				os_free(hapd);
+				hapd_iface->bss[i] = NULL;
+			}
+			os_free(hapd_iface->bss);
+		}
+		wpa_printf(MSG_DEBUG, "%s: free iface %p",
+			   __func__, hapd_iface);
+		os_free(hapd_iface);
+	}
+	return -1;
+}
+
+
 static int hostapd_remove_bss(struct hostapd_iface *iface, unsigned int idx)
 {
 	size_t i;
@@ -2009,6 +2434,40 @@ static int hostapd_remove_bss(struct hostapd_iface *iface, unsigned int idx)
 		struct hostapd_data *hapd = iface->bss[idx];
 
 		hostapd_bss_deinit(hapd);
+		wpa_printf(MSG_DEBUG, "%s: free hapd %p (%s)",
+			   __func__, hapd, hapd->conf->iface);
+		hostapd_config_free_bss(hapd->conf);
+		os_free(hapd);
+
+		iface->num_bss--;
+
+		for (i = idx; i < iface->num_bss; i++)
+			iface->bss[i] = iface->bss[i + 1];
+	} else {
+		hostapd_config_free_bss(iface->conf->bss[idx]);
+		iface->conf->bss[idx] = NULL;
+	}
+
+	iface->conf->num_bss--;
+	for (i = idx; i < iface->conf->num_bss; i++)
+		iface->conf->bss[i] = iface->conf->bss[i + 1];
+
+	return 0;
+}
+
+
+//added by MagicCG
+static int hostapd_remove_bss_odin(struct hostapd_iface *iface, unsigned int idx)
+{
+	size_t i;
+
+	wpa_printf(MSG_INFO, "Remove BSS '%s'", iface->conf->bss[idx]->iface);
+
+	/* Remove hostapd_data only if it has already been initialized */
+	if (idx < iface->num_bss) {
+		struct hostapd_data *hapd = iface->bss[idx];
+
+		hostapd_bss_deinit_odin(hapd);
 		wpa_printf(MSG_DEBUG, "%s: free hapd %p (%s)",
 			   __func__, hapd, hapd->conf->iface);
 		hostapd_config_free_bss(hapd->conf);
@@ -2063,6 +2522,46 @@ int hostapd_remove_iface(struct hapd_interfaces *interfaces, char *buf)
 					!(hapd_iface->drv_flags &
 					  WPA_DRIVER_FLAGS_AP_TEARDOWN_SUPPORT);
 				return hostapd_remove_bss(hapd_iface, j);
+			}
+		}
+	}
+	return -1;
+}
+
+
+//added by MagicCG
+int hostapd_remove_iface_odin(struct hapd_interfaces *interfaces, char *buf)
+{
+	struct hostapd_iface *hapd_iface;
+	size_t i, j, k = 0;
+
+	for (i = 0; i < interfaces->count; i++) {
+		hapd_iface = interfaces->iface[i];
+		if (hapd_iface == NULL)
+			return -1;
+		if (!os_strcmp(hapd_iface->conf->bss[0]->iface, buf)) {
+			wpa_printf(MSG_INFO, "Remove interface '%s'", buf);
+			hapd_iface->driver_ap_teardown =
+				!!(hapd_iface->drv_flags &
+				   WPA_DRIVER_FLAGS_AP_TEARDOWN_SUPPORT);
+
+			hostapd_interface_deinit_free(hapd_iface);
+			k = i;
+			while (k < (interfaces->count - 1)) {
+				interfaces->iface[k] =
+					interfaces->iface[k + 1];
+				k++;
+			}
+			interfaces->count--;
+			return 0;
+		}
+
+		for (j = 0; j < hapd_iface->conf->num_bss; j++) {
+			if (!os_strcmp(hapd_iface->conf->bss[j]->iface, buf)) {
+				hapd_iface->driver_ap_teardown =
+					!(hapd_iface->drv_flags &
+					  WPA_DRIVER_FLAGS_AP_TEARDOWN_SUPPORT);
+				return hostapd_remove_bss_odin(hapd_iface, j);
 			}
 		}
 	}

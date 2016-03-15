@@ -1,0 +1,61 @@
+From 965f89252a9570e806e5cbc688f2d650138809d9 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Tue, 20 Oct 2015 18:04:51 +0800
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E6=94=B9=E8=AE=A2=E9=98=85sub?=
+ =?UTF-8?q?=E4=B8=8A=E4=BC=A0=E6=9C=BA=E5=88=B6?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/odin/odinagent.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 62ee738..354fc9a 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -1447,7 +1447,7 @@ void match_against_subscriptions(StationStats *stats, EtherAddress *src)
+ 	sprintf(publish_msg, "publish %02x:%02x:%02x:%02x:%02x:%02x %d%s\n",
+ 			MAC2STR(src->mac_addr), count, subscription_matches);
+ 	udp_send_msg(CONTROLLER, UDP_DEST_PORT, publish_msg);
+-//	wpa_printf(MSG_INFO, "match sub: 上传订阅: %s", publish_msg);
++	wpa_printf(MSG_INFO, "match sub: 上传订阅: %s", publish_msg);
+ }
+ 
+ void update_rx_stats(struct ieee80211_hdr *hdr, int datarate,
+@@ -1604,7 +1604,7 @@ void recv_probe_request(unsigned char *buf)
+ 	}
+ 
+ 	sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x %s\n", MAC2STR(src.mac_addr), ssid->str);
+-	//wpa_printf(MSG_INFO, "recvprobe : 接收到ssid:%s的%s", ssid->str, tmp);
++	wpa_printf(MSG_INFO, "recvprobe : 接收到ssid:%s的%s", ssid->str, tmp);
+ 	udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
+ 	if (ssid != NULL)
+ 		free(ssid);
+@@ -1681,6 +1681,10 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 	fc = le_to_host16(hdr->frame_control);
+ 	stype = WLAN_FC_GET_STYPE(fc);
+ 
++	if ((datarate != 0) &&(ssi_signal != 0)) {
++		update_rx_stats(hdr, datarate, ssi_signal, noise);
++//		wpa_printf(MSG_INFO, "odin nl80211: rate is %d Mbps, rssi is %d dbm.", datarate, ssi_signal);
++	}
+ 	switch (WLAN_FC_GET_TYPE(fc)) {
+ 	case WLAN_FC_TYPE_MGMT:
+ 		if (stype == WLAN_FC_STYPE_PROBE_REQ) {
+@@ -1696,10 +1700,7 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 	case WLAN_FC_TYPE_CTRL:
+ 		break;
+ 	case WLAN_FC_TYPE_DATA:
+-		if ((datarate != 0) &&(ssi_signal != 0)) {
+-			update_rx_stats(hdr, datarate, ssi_signal, noise);
+-		//	wpa_printf(MSG_INFO, "odin nl80211: rate is %d Mbps, rssi is %d dbm.", datarate, ssi_signal);
+-		}
++
+ 		break;
+ 	}
+ 
+-- 
+1.9.4.msysgit.2
+

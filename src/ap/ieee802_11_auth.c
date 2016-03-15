@@ -248,6 +248,10 @@ int hostapd_allowed_address(struct hostapd_data *hapd, const u8 *addr,
 	if (radius_cui)
 		*radius_cui = NULL;
 
+	//added by MagicCG
+	wpa_printf(MSG_INFO, "macaddr_acl:%d, num_accept_mac:%d, num_deny_mac:%d",
+			hapd->conf->macaddr_acl, hapd->conf->num_accept_mac, hapd->conf->num_deny_mac);
+	
 	if (hostapd_maclist_found(hapd->conf->accept_mac,
 				  hapd->conf->num_accept_mac, addr, vlan_id))
 		return HOSTAPD_ACL_ACCEPT;

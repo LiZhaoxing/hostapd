@@ -1,0 +1,224 @@
+From 035fcb049f345c5273bdba77d0026ea141129a93 Mon Sep 17 00:00:00 2001
+From: MarvinCao <caogang440@163.com>
+Date: Thu, 17 Dec 2015 13:41:46 +0800
+Subject: [PATCH] enable swan config file
+
+---
+ src/odin/odinagent.c | 116 +++++++++++++++++++++++++++++++++++++++++++++++----
+ src/odin/odinagent.h |   7 ++++
+ 2 files changed, 116 insertions(+), 7 deletions(-)
+
+diff --git a/src/odin/odinagent.c b/src/odin/odinagent.c
+index 8d6bd6b..a2677a4 100644
+--- a/src/odin/odinagent.c
++++ b/src/odin/odinagent.c
+@@ -13,6 +13,7 @@
+ 
+ void remove_odin_lvaps_all();
+ void send_beacon(EtherAddress dst, EtherAddress bssid, String *my_ssid);
++struct swan_config * swan_config_read(const char *fname);
+ 
+ char *protocol_string[15] = {"table", "channel", "interval", "rxstats",
+ 						  "subscriptions", "debug", "report_mean", "spectral_scan",
+@@ -146,8 +147,11 @@ void udp_sockfd_deinit()
+ 	odin_udp_sockfd = -1;
+ }
+ 
+-void udp_send_msg(const char *dest_host, int dest_port, const char *msg) {
++void udp_send_msg(const u8 *dest, int dest_port, const char *msg) {
+ 	struct sockaddr_in dest_addr;
++	char dest_host[30];
++
++	sprintf(dest_host, IPSTR, IP2STR(dest));
+ 	dest_addr.sin_family = AF_INET;
+ 	dest_addr.sin_port = htons(dest_port);
+ 	dest_addr.sin_addr.s_addr = inet_addr(dest_host);
+@@ -175,7 +179,7 @@ void udp_send_msg(const char *dest_host, int dest_port, const char *msg) {
+ void* ping_thread(void *arg)
+ {
+ 	while (1) {
+-		udp_send_msg(CONTROLLER, UDP_DEST_PORT, "ping");
++		udp_send_msg(swan_conf->controller_ip, swan_conf->udp_dest_port, "ping");
+ 		sleep(2);
+ 	}
+ }
+@@ -1055,7 +1059,12 @@ void odin_protocol_init(struct hapd_interfaces *ifaces)
+ 	//odin_ping protocol
+ 	//start a new thread
+ 	interfaces = ifaces;
+-	odin_protocol_eloop_init(TCP_LISTEN_PORT);
++	swan_conf = swan_config_read("/etc/config/swan_config");
++	if (swan_conf == NULL) {
++	    printf("read swan config error");
++	    exit(1);
++	}
++	odin_protocol_eloop_init(swan_conf->tcp_listen_port);
+ 	udp_sockfd_init();
+ 	params_init();
+ 	ping_thread_init();
+@@ -1076,6 +1085,9 @@ void odin_protocol_deinit()
+ 	params_deinit();
+ 	udp_sockfd_deinit();
+ 	odin_protocol_eloop_deinit();
++
++	if(swan_conf)
++	    os_free(swan_conf);
+ }
+ 
+ int odin_send_msg(protocol_type type)
+@@ -1187,7 +1199,7 @@ void match_against_subscriptions(StationStats *stats, EtherAddress *src)
+ 
+ 	sprintf(publish_msg, "publish %02x:%02x:%02x:%02x:%02x:%02x %d%s\n",
+ 			MAC2STR(src->mac_addr), count, subscription_matches);
+-	udp_send_msg(CONTROLLER, UDP_DEST_PORT, publish_msg);
++	udp_send_msg(swan_conf->controller_ip, swan_conf->udp_dest_port, publish_msg);
+ 	//wpa_printf(MSG_INFO, "match sub: 上传订阅: %s", publish_msg);
+ }
+ 
+@@ -1278,7 +1290,7 @@ void recv_auth(unsigned char *buf, int len)
+ 	        ssid[interfaces->iface[0]->bss[0]->conf->ssid.ssid_len] = '\0';
+ 	        sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x %s\n", MAC2STR(mgmt->sa), ssid);
+ //	        wpa_printf(MSG_INFO, "recv auth request : %s", tmp);
+-	        udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
++	        udp_send_msg(swan_conf->controller_ip, swan_conf->udp_dest_port, tmp);
+ 	    }
+ 	}
+ }
+@@ -1341,13 +1353,13 @@ void recv_probe_request(unsigned char *buf, int buf_p_len)
+ 	if (ssid_empty) {
+ 		sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x \n", MAC2STR(src.mac_addr));
+ //wpa_printf(MSG_INFO, "recvprobe : 接收到空ssid的%s", tmp);
+-		udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
++		udp_send_msg(swan_conf->controller_ip, swan_conf->udp_dest_port, tmp);
+ 		return;
+ 	}
+ 
+ 	sprintf(tmp, "probe %02x:%02x:%02x:%02x:%02x:%02x %s\n", MAC2STR(src.mac_addr), ssid->str);
+ //wpa_printf(MSG_INFO, "recvprobe : 接收到ssid:%s的%s", ssid->str, tmp);
+-	udp_send_msg(CONTROLLER, UDP_DEST_PORT, tmp);
++	udp_send_msg(swan_conf->controller_ip, swan_conf->udp_dest_port, tmp);
+ 	if (ssid != NULL)
+ 		free(ssid);
+ //wpa_printf(MSG_INFO, "recvprobe : free ssid success");
+@@ -1468,3 +1480,93 @@ void odin_handle_monitor_read(int sock, void *eloop_ctx, void *sock_ctx)
+ 	}
+ 
+ }
++
++
++static void swan_config_default(struct swan_config *conf)
++{
++    if (conf != NULL) {
++        COPY_STR2IP(CONTROLLER, conf->controller_ip);
++        conf->tcp_listen_port = TCP_LISTEN_PORT;
++        conf->udp_dest_port = UDP_DEST_PORT;
++    }
++}
++
++static int swan_config_fill(struct swan_config *conf,
++                   char *buf, char *pos, int line)
++{
++    if (os_strcmp(buf, "controller_ip") == 0) {
++        COPY_STR2IP(pos, conf->controller_ip);
++    } else if (os_strcmp(buf, "tcp_listen_port") == 0) {
++        conf->tcp_listen_port = atoi(pos);
++    } else if (os_strcmp(buf, "udp_server_port") == 0) {
++        conf->udp_dest_port = atoi(pos);
++    }
++    return 0;
++}
++
++/**
++ * swan_config_read - Read and parse a configuration file
++ * @fname: Configuration file name (including path, if needed)
++ * Returns: Allocated configuration data structure
++ */
++struct swan_config * swan_config_read(const char *fname)
++{
++    struct swan_config *conf;
++    FILE *f;
++    char buf[512], *pos;
++    int line = 0;
++    int errors = 0;
++    size_t i;
++
++    conf = os_zalloc(sizeof(*conf));
++    if (conf == NULL) {
++        return NULL;
++    }
++
++    swan_config_default(conf);
++
++    f = fopen(fname, "r");
++    if (f == NULL) {
++        wpa_printf(MSG_INFO, "swan_config_read : open configuration file '%s' error\nUsing the default setting", fname);
++        wpa_printf(MSG_INFO, IPSTR, IP2STR(conf->controller_ip));
++        wpa_printf(MSG_INFO, "tcp_listen_port = %d", conf->tcp_listen_port);
++        wpa_printf(MSG_INFO, "udp_server_port = %d", conf->udp_dest_port);
++        return conf;
++    }
++
++    while (fgets(buf, sizeof(buf), f)) {
++        line++;
++
++        if (buf[0] == '#')
++            continue;
++        pos = buf;
++        while (*pos != '\0') {
++            if (*pos == '\n') {
++                *pos = '\0';
++                break;
++            }
++            pos++;
++        }
++        if (buf[0] == '\0')
++            continue;
++
++        pos = os_strchr(buf, '=');
++        if (pos == NULL) {
++            wpa_printf(MSG_ERROR, "Line %d: invalid line '%s'",
++                   line, buf);
++            errors++;
++            continue;
++        }
++        *pos = '\0';
++        pos++;
++        errors += swan_config_fill(conf, buf, pos, line);
++    }
++
++    fclose(f);
++
++    wpa_printf(MSG_INFO, "swan_config_read : open configuration file '%s'", fname);
++    wpa_printf(MSG_INFO, IPSTR, IP2STR(conf->controller_ip));
++    wpa_printf(MSG_INFO, "tcp_listen_port = %d", conf->tcp_listen_port);
++    wpa_printf(MSG_INFO, "udp_server_port = %d", conf->udp_dest_port);
++    return conf;
++}
+diff --git a/src/odin/odinagent.h b/src/odin/odinagent.h
+index 09260c5..592192e 100644
+--- a/src/odin/odinagent.h
++++ b/src/odin/odinagent.h
+@@ -36,6 +36,12 @@
+ #define IPSTR	"%d.%d.%d.%d"
+ #endif
+ 
++struct swan_config {
++    u8 controller_ip[IP_ALEN];
++    int tcp_listen_port;
++    int udp_dest_port;
++};
++
+ static inline void str2ip(const char *str, u8 *ip)
+ {
+ 	int i;
+@@ -146,6 +152,7 @@ c_pvector client_sock_vector;
+ 
+ // global hapd_interfaces
+ struct hapd_interfaces *interfaces;
++struct swan_config *swan_conf;
+ 
+ /* odinagent.c */
+ void odin_protocol_init();
+-- 
+1.9.4.msysgit.2
+
